@@ -6,13 +6,26 @@
   "build": {
     "frontendDist": "../ui/dist",
     "devUrl": "http://localhost:1420",
-    "beforeDevCommand": { "script": "trunk serve --port 1420", "cwd": "../ui" },
-    "beforeBuildCommand": { "script": "trunk build --release", "cwd": "../ui" }
+    "beforeDevCommand": {
+      "script": "trunk serve --port 1420",
+      "cwd": "../ui"
+    },
+    "beforeBuildCommand": {
+      "script": "trunk build --release",
+      "cwd": "../ui"
+    }
   },
   "app": {
     "withGlobalTauri": true,
     "windows": [
-      { "label": "main", "title": "Career Compass", "width": 1200, "height": 800, "minWidth": 900, "minHeight": 600 }
+      {
+        "label": "main",
+        "title": "Career Compass",
+        "width": 1200,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600
+      }
     ],
     "security": {
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self' ipc: http://ipc.localhost"
@@ -20,8 +33,29 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["app", "dmg"],
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"],
-    "macOS": { "signingIdentity": "-", "minimumSystemVersion": "11.0" }
+    "targets": [
+      "app",
+      "dmg"
+    ],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "macOS": {
+      "signingIdentity": "-",
+      "minimumSystemVersion": "11.0"
+    },
+    "createUpdaterArtifacts": true
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRGQjAzOEM5MkM4MEI4MUEKUldRYXVJQXN5VGl3VHo5Y0xTbXBKdS9MeXFhUnJ1Wk5uSTdiRW9RMG9Ba3RCb2oxaUUvdUtoT2QK",
+      "endpoints": [
+        "https://github.com/hugovangarderen-papersteel/career-compass/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

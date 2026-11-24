@@ -197,9 +197,25 @@ async fn me(session: tauri::State<'_, Session>) -> Result<Value, String> {
     Ok(body)
 }
 
+/// Quiet update at launch: a newer PUBLISHED release is downloaded and installed in the
+/// background and takes effect the next time she opens the app. No prompt, no nudge.
+/// Signed with the updater key; an unsigned or tampered bundle is refused by the plugin.
+async fn quiet_update(app: tauri::AppHandle) {
+    use tauri_plugin_updater::UpdaterExt;
+    let Ok(updater) = app.updater() else { return };
+    if let Ok(Some(update)) = updater.check().await {
+        let _ = update.download_and_install(|_, _| {}, || {}).await;
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .setup(|app| {
+            tauri::async_runtime::spawn(quiet_update(app.handle().clone()));
+            Ok(())
+        })
         .manage(Session::default())
         .invoke_handler(tauri::generate_handler![
             pair_check,
