@@ -620,6 +620,7 @@ fn Section(ctx: Ctx, sec: Value, data: Value, turns: Value, approved: bool) -> i
         .map(|f| {
             let rows = items(&data[f.as_str()]);
             let label = field_label(f);
+            let list = if rows.len() == 1 { "one" } else { "" };
             let lines = rows
                 .iter()
                 .map(|it| {
@@ -651,7 +652,7 @@ fn Section(ctx: Ctx, sec: Value, data: Value, turns: Value, approved: bool) -> i
             view! {
                 {(!label.is_empty()).then(|| view! { <h3>{label}</h3> })}
                 {rows.is_empty().then(|| view! { <p class="empty">"Nog niets."</p> })}
-                <ul>{lines}</ul>
+                <ul class=list>{lines}</ul>
             }
         })
         .collect_view();

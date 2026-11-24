@@ -52,6 +52,8 @@ button.danger { background: #a8322a; }
 .section h2 { margin: 0 0 0.6rem; font-size: 1.2rem; }
 .section h3 { margin: 0.9rem 0 0.2rem; font-size: 0.85rem; text-transform: uppercase; letter-spacing: 0.04rem; color: var(--muted); }
 .section ul { margin: 0.3rem 0; padding-left: 1.1rem; }
+.section ul.one { list-style: none; padding-left: 0; }
+.kompas .card > :first-child { margin-top: 0; }
 .section li { margin: 0.35rem 0; line-height: 1.45; }
 .chip { margin: 0 0 0 0.35rem; padding: 0.1rem 0.5rem; font-size: 0.75rem; border-radius: 99px; background: var(--paper); color: var(--accent); border: 1px solid var(--line); }
 blockquote { margin: 0.6rem 0; padding: 0.6rem 0.9rem; background: var(--paper); border-left: 3px solid var(--accent); font-size: 0.95rem; cursor: pointer; }
