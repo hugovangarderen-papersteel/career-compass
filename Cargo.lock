@@ -483,7 +483,7 @@ dependencies = [
 
 [[package]]
 name = "career-compass"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "base64 0.22.1",
  "ed25519-dalek",
@@ -544,7 +544,7 @@ dependencies = [
 
 [[package]]
 name = "cc-api"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "anyhow",
  "argon2",
@@ -573,7 +573,7 @@ dependencies = [
 
 [[package]]
 name = "cc-core"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "chrono",
  "rand",
@@ -583,7 +583,7 @@ dependencies = [
 
 [[package]]
 name = "cc-db"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "cc-core",
  "chrono",
@@ -593,19 +593,19 @@ dependencies = [
 
 [[package]]
 name = "cc-embed"
-version = "0.0.1"
+version = "0.0.2"
 
 [[package]]
 name = "cc-enrich"
-version = "0.0.1"
+version = "0.0.2"
 
 [[package]]
 name = "cc-llm"
-version = "0.0.1"
+version = "0.0.2"
 
 [[package]]
 name = "cc-ui"
-version = "0.0.1"
+version = "0.0.2"
 dependencies = [
  "console_error_panic_hook",
  "leptos",
@@ -618,7 +618,7 @@ dependencies = [
 
 [[package]]
 name = "cc-worker"
-version = "0.0.1"
+version = "0.0.2"
 
 [[package]]
 name = "cesu8"
