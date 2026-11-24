@@ -1,0 +1,214 @@
+//! Native side of the app: the device key and token in the Keychain, and every call to the server.
+//! Errors are returned as the server's short codes (`unauthorized`, `expired`...) or `offline`;
+//! the window turns them into Dutch sentences.
+
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
+use ed25519_dalek::{Signer, SigningKey};
+use serde_json::{json, Value};
+use std::sync::Mutex;
+use std::time::Duration;
+
+/// Server address, fixed at build time (`CC_API_URL`); the tunnel hostname is set in the release build.
+const API: &str = match option_env!("CC_API_URL") {
+    Some(u) => u,
+    None => "http://localhost:8080",
+};
+const SERVICE: &str = "nl.careercompass.app";
+const POLL: Duration = Duration::from_secs(3);
+
+#[derive(Default)]
+struct Session(Mutex<Option<String>>);
+
+// ---------- keychain ----------
+
+fn entry(name: &str) -> Result<keyring::Entry, String> {
+    keyring::Entry::new(SERVICE, name).map_err(|e| format!("keychain: {e}"))
+}
+
+fn get(name: &str) -> Result<Option<String>, String> {
+    match entry(name)?.get_password() {
+        Ok(v) => Ok(Some(v)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(format!("keychain: {e}")),
+    }
+}
+
+fn put(name: &str, value: &str) -> Result<(), String> {
+    entry(name)?.set_password(value).map_err(|e| format!("keychain: {e}"))
+}
+
+fn forget(name: &str) {
+    if let Ok(e) = entry(name) {
+        let _ = e.delete_credential();
+    }
+}
+
+/// This Mac's ed25519 key; made once, the private half never leaves the Keychain.
+fn signing_key() -> Result<SigningKey, String> {
+    if let Some(s) = get("device-key")? {
+        let b: [u8; 32] = STANDARD
+            .decode(s)
+            .ok()
+            .and_then(|v| v.try_into().ok())
+            .ok_or("keychain: bad device key")?;
+        return Ok(SigningKey::from_bytes(&b));
+    }
+    let mut b = [0u8; 32];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut b);
+    put("device-key", &STANDARD.encode(b))?;
+    Ok(SigningKey::from_bytes(&b))
+}
+
+// ---------- http ----------
+
+async fn send(req: reqwest::RequestBuilder) -> Result<(u16, Value), String> {
+    let res = req
+        .timeout(Duration::from_secs(20))
+        .send()
+        .await
+        .map_err(|_| "offline".to_string())?;
+    let code = res.status().as_u16();
+    let body = res.json::<Value>().await.unwrap_or(Value::Null);
+    Ok((code, body))
+}
+
+fn server_error(body: &Value) -> String {
+    body["error"].as_str().unwrap_or("server").to_string()
+}
+
+fn device_token() -> Result<String, String> {
+    get("device-token")?.ok_or_else(|| "unpaired".to_string())
+}
+
+/// `device_rejected` means Hugo revoked this Mac: drop the token so it pairs again.
+fn revoked_if_401(_code: u16, body: &Value) -> String {
+    if body["error"] == "device_rejected" {
+        forget("device-token");
+        return "revoked".into();
+    }
+    server_error(body)
+}
+
+// ---------- commands ----------
+
+/// One look at the pairing state: `paired`, `unpaired`, or `pending` with its code.
+#[tauri::command]
+async fn pair_check() -> Result<Value, String> {
+    if get("device-token")?.is_some() {
+        return Ok(json!({ "status": "paired" }));
+    }
+    let Some(id) = get("pairing-id")? else {
+        return Ok(json!({ "status": "unpaired" }));
+    };
+    claim_once(&id).await
+}
+
+async fn claim_once(id: &str) -> Result<Value, String> {
+    let sig = STANDARD.encode(signing_key()?.sign(format!("cc-pair:{id}").as_bytes()).to_bytes());
+    let (code, body) = send(
+        reqwest::Client::new()
+            .post(format!("{API}/pair/{id}/claim"))
+            .json(&json!({ "signature": sig })),
+    )
+    .await?;
+    match code {
+        202 => Ok(json!({ "status": "pending", "code": body["code"] })),
+        200 => {
+            let token = body["device_token"].as_str().ok_or("server")?;
+            put("device-token", token)?;
+            forget("pairing-id");
+            Ok(json!({ "status": "approved" }))
+        }
+        404 | 409 | 410 => {
+            forget("pairing-id");
+            Ok(json!({ "status": if code == 410 { server_error(&body) } else { "unpaired".into() } }))
+        }
+        _ => Err(server_error(&body)),
+    }
+}
+
+#[tauri::command]
+async fn pair_start(device_name: String) -> Result<Value, String> {
+    let pk = STANDARD.encode(signing_key()?.verifying_key().to_bytes());
+    let req = reqwest::Client::new()
+        .post(format!("{API}/pair/request"))
+        .json(&json!({ "device_name": device_name, "public_key": pk }));
+    let (code, body) = send(req).await?;
+    if code != 201 {
+        return Err(server_error(&body));
+    }
+    put("pairing-id", body["id"].as_str().ok_or("server")?)?;
+    Ok(json!({ "code": body["code"], "expires_at": body["expires_at"] }))
+}
+
+/// Waits until Hugo decides or the 15 minutes run out; returns the final status.
+#[tauri::command]
+async fn pair_wait() -> Result<Value, String> {
+    loop {
+        let Some(id) = get("pairing-id")? else {
+            return Ok(json!({ "status": if get("device-token")?.is_some() { "approved" } else { "unpaired" } }));
+        };
+        let v = match claim_once(&id).await {
+            Err(e) if e == "offline" => json!({ "status": "pending" }),
+            other => other?,
+        };
+        if v["status"] != "pending" {
+            return Ok(v);
+        }
+        tokio::time::sleep(POLL).await;
+    }
+}
+
+async fn start_session(path: &str, email: String, password: String, session: &Session) -> Result<Value, String> {
+    let req = reqwest::Client::new()
+        .post(format!("{API}{path}"))
+        .header("x-device-token", device_token()?)
+        .json(&json!({ "email": email, "password": password }));
+    let (code, body) = send(req).await?;
+    if code != 200 {
+        return Err(revoked_if_401(code, &body));
+    }
+    *session.0.lock().map_err(|_| "state")? = body["session"].as_str().map(String::from);
+    Ok(json!({ "ok": true }))
+}
+
+#[tauri::command]
+async fn set_password(email: String, password: String, session: tauri::State<'_, Session>) -> Result<Value, String> {
+    start_session("/auth/set-password", email, password, &session).await
+}
+
+#[tauri::command]
+async fn login(email: String, password: String, session: tauri::State<'_, Session>) -> Result<Value, String> {
+    start_session("/auth/login", email, password, &session).await
+}
+
+#[tauri::command]
+async fn me(session: tauri::State<'_, Session>) -> Result<Value, String> {
+    let jwt = session.0.lock().map_err(|_| "state")?.clone().ok_or("unauthorized")?;
+    let req = reqwest::Client::new()
+        .get(format!("{API}/me"))
+        .header("x-device-token", device_token()?)
+        .bearer_auth(jwt);
+    let (code, body) = send(req).await?;
+    if code != 200 {
+        return Err(revoked_if_401(code, &body));
+    }
+    Ok(body)
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .manage(Session::default())
+        .invoke_handler(tauri::generate_handler![
+            pair_check,
+            pair_start,
+            pair_wait,
+            set_password,
+            login,
+            me
+        ])
+        .run(tauri::generate_context!())
+        .expect("Career Compass could not start");
+}

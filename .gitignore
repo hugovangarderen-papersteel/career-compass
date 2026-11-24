@@ -1,0 +1,10 @@
+/target
+**/dist/
+.env
+deploy/.env
+*.db
+*.log
+*.dump
+*.age
+node_modules/
+/crates/web/src-tauri/gen/

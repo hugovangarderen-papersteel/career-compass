@@ -1,0 +1,53 @@
+# DRAFT — not deployed. Runs on the lab server as its own Compose project, separate from the lab stack:
+#   docker compose -p career-compass --env-file deploy/.env -f deploy/compose.yaml up -d
+# Deploying needs the owner's go. Postgres has no published port; only the api is reachable.
+name: career-compass
+
+services:
+  db:
+    image: postgres:16 # Phase 1 swaps in an image with pgvector + PostGIS
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: cc
+      POSTGRES_USER: cc
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in deploy/.env}
+    volumes:
+      - db:/var/lib/postgresql/data
+    networks: [cc]
+    mem_limit: 1g
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cc -d cc"]
+      interval: 10s
+      retries: 10
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://cc:${POSTGRES_PASSWORD}@db:5432/cc
+      CC_JWT_SECRET: ${CC_JWT_SECRET:?set in deploy/.env}
+      CC_ADMIN_TOKEN: ${CC_ADMIN_TOKEN:?set in deploy/.env}
+      CC_BIND: 0.0.0.0:8080
+    networks: [cc]
+    mem_limit: 256m
+
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set in deploy/.env}
+    depends_on: [api]
+    networks: [cc]
+    mem_limit: 128m
+
+networks:
+  cc: {}
+
+volumes:
+  db: {}

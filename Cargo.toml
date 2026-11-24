@@ -1,0 +1,46 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/core", "crates/db", "crates/api",
+  "crates/worker", "crates/enrich", "crates/llm", "crates/embed",
+  "crates/web/ui", "crates/web/src-tauri",
+]
+# The desktop crates need the webview toolchain; the server crates build anywhere.
+default-members = [
+  "crates/core", "crates/db", "crates/api",
+  "crates/worker", "crates/enrich", "crates/llm", "crates/embed",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/hugovangarderen-papersteel/career-compass"
+
+[workspace.dependencies]
+cc-core = { path = "crates/core" }
+cc-db = { path = "crates/db" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = { version = "0.4", default-features = false, features = ["serde", "clock", "std"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "uuid", "chrono", "macros", "migrate"] }
+axum = "0.8"
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["trace"] }
+jsonwebtoken = "9"
+argon2 = "0.5"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.22"
+subtle = "2"
+clap = { version = "4", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+
+[profile.release]
+lto = "thin"
+strip = true

@@ -1,0 +1,43 @@
+name: release
+
+# A tag v* builds the universal (Apple silicon + Intel) app and puts the .dmg on a DRAFT release.
+# Hugo publishes the draft; nothing reaches her Mac before that.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin, x86_64-apple-darwin, wasm32-unknown-unknown
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: trunk,tauri-cli
+      - name: Build
+        working-directory: crates/web/src-tauri
+        env:
+          # Public server address (the tunnel hostname), set as a repository variable.
+          CC_API_URL: ${{ vars.CC_API_URL }}
+        run: cargo tauri build --target universal-apple-darwin
+      - name: Gatekeeper probe (records what she will see on first open)
+        continue-on-error: true
+        run: |
+          APP=$(find target/universal-apple-darwin/release/bundle/macos -name '*.app' -maxdepth 1 | head -1)
+          codesign -dv --verbose=2 "$APP" 2>&1 | tee gatekeeper.txt
+          spctl --assess --type execute -vv "$APP" 2>&1 | tee -a gatekeeper.txt || echo "spctl: rejected (expected for ad-hoc signing)" | tee -a gatekeeper.txt
+      - name: Draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          DMG=$(find target/universal-apple-darwin/release/bundle/dmg -name '*.dmg' | head -1)
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --draft --title "Career Compass $TAG" --notes "Draft build. Publish to make it installable."
+          gh release upload "$TAG" "$DMG" gatekeeper.txt --clobber
