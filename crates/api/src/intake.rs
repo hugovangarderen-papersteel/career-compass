@@ -87,7 +87,8 @@ async fn view(st: &AppState, user: &cc_db::User) -> ApiResult<Json<Value>> {
         "sections": SECTIONS.iter().map(|s| json!({"key": s.0, "title": s.1, "fields": s.2})).collect::<Vec<_>>(),
         "pending_docs": pending_docs,
         "is_test": user.is_test,
-        "online": st.llm.is_some(),
+        "online": st.llm.is_some() && (user.is_test || !st.mock_model),
+        "mock": st.mock_model,
     })))
 }
 
@@ -98,8 +99,12 @@ async fn view_route(State(st): State<AppState>, h: HeaderMap) -> ApiResult<Json<
 
 // ---------- model calls, metered ----------
 
-async fn ask(st: &AppState, req: &ToolRequest) -> ApiResult<Value> {
+async fn ask(st: &AppState, user: &cc_db::User, req: &ToolRequest) -> ApiResult<Value> {
     let llm = st.llm.as_ref().ok_or(ApiError::Unavailable("kompas_offline"))?;
+    // The canned test model answers test accounts only; a real account never sees its words.
+    if st.mock_model && !user.is_test {
+        return Err(ApiError::Unavailable("kompas_offline"));
+    }
     let spent = cc_db::month_spend(&st.pool).await?;
     let cap = cc_db::cap_eur(&st.pool).await?;
     if !may_spend(spent, req.estimate_usd() * st.eur_per_usd, cap, Lane::Hers) {
@@ -238,7 +243,7 @@ async fn start(State(st): State<AppState>, h: HeaderMap) -> ApiResult<Json<Value
     };
     if cc_db::turns(&st.pool, s.id).await?.is_empty() {
         let (docs, _) = confirmed_docs(&st, user.id, DOCS_IN_CHAT).await?;
-        let v = ask(&st, &kompas_request(&[], &progress_of(&s), &docs)).await?;
+        let v = ask(&st, &user, &kompas_request(&[], &progress_of(&s), &docs)).await?;
         let (msg, _) = kompas_message(&v)?;
         cc_db::add_turn(&st.pool, s.id, "kompas", s.phase, &msg).await?;
     }
@@ -272,7 +277,7 @@ async fn message(State(st): State<AppState>, h: HeaderMap, Json(b): Json<Say>) -
     }
     let mut p = progress_of(&s);
     let (docs, _) = confirmed_docs(&st, user.id, DOCS_IN_CHAT).await?;
-    let v = ask(&st, &kompas_request(&turns, &p, &docs)).await?;
+    let v = ask(&st, &user, &kompas_request(&turns, &p, &docs)).await?;
     let (msg, phase_complete) = kompas_message(&v)?;
     p.advance(phase_complete);
     s.phase = p.phase as i16;
@@ -458,7 +463,7 @@ async fn playback(State(st): State<AppState>, h: HeaderMap) -> ApiResult<Json<Va
         max_tokens: 8_000,
     };
     let (stories, prefs) = (req(&EXTRACT_STORIES), req(&EXTRACT_PREFS));
-    let (mut v, more) = tokio::try_join!(ask(&st, &stories), ask(&st, &prefs))?;
+    let (mut v, more) = tokio::try_join!(ask(&st, &user, &stories), ask(&st, &user, &prefs))?;
     if let (Some(o), Value::Object(m)) = (v.as_object_mut(), more) {
         o.extend(m);
     }
@@ -505,7 +510,7 @@ async fn pitch(State(st): State<AppState>, h: HeaderMap) -> ApiResult<Json<Value
             tool_schema: object_schema(&["pitch", "voice_sample"]),
             max_tokens: 1_500,
         };
-        let v = ask(&st, &req).await?;
+        let v = ask(&st, &user, &req).await?;
         p.pitch = serde_json::from_value(v["pitch"].clone()).unwrap_or_default();
         p.voice_sample = serde_json::from_value(v["voice_sample"].clone()).unwrap_or_default();
         let words = profile::word_count(&p.pitch.text);
@@ -572,7 +577,7 @@ async fn correct(State(st): State<AppState>, h: HeaderMap, Json(b): Json<Correct
         tool_schema: json!({"type": "object", "properties": {"updated": object_schema(keys)}, "required": ["updated"]}),
         max_tokens: 3_000,
     };
-    let v = ask(&st, &req).await?;
+    let v = ask(&st, &user, &req).await?;
     let mut data = current;
     for k in keys {
         if let Some(new) = v["updated"].get(*k) {

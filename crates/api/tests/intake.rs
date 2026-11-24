@@ -114,6 +114,7 @@ fn app(pool: PgPool, llm: Option<String>) -> Router {
         llm: llm.map(|u| cc_llm::Client::new(&u, "test-key")),
         eur_per_usd: 1.0,
         web_dir: None,
+        mock_model: false,
     })
 }
 
@@ -477,6 +478,7 @@ async fn live_dummy(pool: PgPool) {
         llm: Some(cc_llm::Client::new("https://api.anthropic.com", &key)),
         eur_per_usd: 1.0,
         web_dir: None,
+        mock_model: false,
     };
     let app = cc_api::app(st);
     let h = login(&app, "dummy@example.org").await;
@@ -528,4 +530,40 @@ async fn live_dummy(pool: PgPool) {
     assert!(d["evidence"].as_array().is_some_and(|e| !e.is_empty()));
     assert!(eur < 30.0, "cost {eur}");
     assert!(cache_read > 0, "prompt caching is hit");
+}
+
+/// With the canned test model on, only a test account gets answers; a real account sees offline.
+#[sqlx::test(migrations = "../db/migrations")]
+async fn mock_model_answers_test_accounts_only(pool: PgPool) {
+    let tester = cc_db::create_user(&pool, "tester@example.org", cc_core::Role::Seeker)
+        .await
+        .unwrap();
+    cc_db::mark_test_user(&pool, tester).await.unwrap();
+    cc_db::create_user(&pool, "real@example.org", cc_core::Role::Seeker)
+        .await
+        .unwrap();
+    let (url, seen) = mock_model().await;
+    let app = cc_api::app(cc_api::AppState {
+        pool: pool.clone(),
+        jwt_secret: b"test-jwt-secret-0123456789abcdef0123".to_vec(),
+        admin_token: ADMIN.into(),
+        llm: Some(cc_llm::Client::new(&url, "mock")),
+        eur_per_usd: 1.0,
+        web_dir: None,
+        mock_model: true,
+    });
+
+    let real = login(&app, "real@example.org").await;
+    let (_, v) = call(&app, "GET", "/intake", &real, None).await;
+    assert_eq!(v["online"], false);
+    let (c, v) = call(&app, "POST", "/intake/start", &real, None).await;
+    assert_eq!(c, StatusCode::SERVICE_UNAVAILABLE, "{v}");
+    assert!(seen.lock().unwrap().is_empty(), "a real account never reaches the mock");
+
+    let test = login(&app, "tester@example.org").await;
+    let (_, v) = call(&app, "GET", "/intake", &test, None).await;
+    assert_eq!(v["online"], true);
+    let (c, v) = call(&app, "POST", "/intake/start", &test, None).await;
+    assert_eq!(c, StatusCode::OK, "{v}");
+    assert_eq!(seen.lock().unwrap().len(), 1);
 }

@@ -54,3 +54,4 @@ jobs:
         run: trunk build
       - run: cargo clippy -p cc-ui --target wasm32-unknown-unknown -- -D warnings
       - run: cargo clippy -p career-compass -- -D warnings
+      - run: cargo test -p career-compass --lib

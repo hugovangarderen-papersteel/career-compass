@@ -63,11 +63,11 @@ fn signing_key() -> Result<SigningKey, String> {
 // ---------- http ----------
 
 async fn send(req: reqwest::RequestBuilder) -> Result<(u16, Value), String> {
-    let res = req
-        .timeout(Duration::from_secs(20))
-        .send()
-        .await
-        .map_err(|_| "offline".to_string())?;
+    send_within(req, Duration::from_secs(20)).await
+}
+
+async fn send_within(req: reqwest::RequestBuilder, limit: Duration) -> Result<(u16, Value), String> {
+    let res = req.timeout(limit).send().await.map_err(|_| "offline".to_string())?;
     let code = res.status().as_u16();
     let body = res.json::<Value>().await.unwrap_or(Value::Null);
     Ok((code, body))
@@ -197,6 +197,43 @@ async fn me(session: tauri::State<'_, Session>) -> Result<Value, String> {
     Ok(body)
 }
 
+/// The only paths the window may reach through `api`: her intake and who she is.
+fn allowed(method: &str, path: &str) -> bool {
+    matches!(method, "GET" | "POST")
+        && !path.contains("..")
+        && !path.contains('?')
+        && (path == "/me" || path == "/intake" || path.starts_with("/intake/"))
+}
+
+/// One call to her own data on the server. Making her profile can take a minute, hence 120 s.
+#[tauri::command]
+async fn api(
+    method: String,
+    path: String,
+    body: Option<Value>,
+    session: tauri::State<'_, Session>,
+) -> Result<Value, String> {
+    if !allowed(&method, &path) {
+        return Err("not_allowed".into());
+    }
+    let jwt = session.0.lock().map_err(|_| "state")?.clone().ok_or("unauthorized")?;
+    let c = reqwest::Client::new();
+    let mut req = if method == "GET" {
+        c.get(format!("{API}{path}"))
+    } else {
+        c.post(format!("{API}{path}"))
+    };
+    req = req.header("x-device-token", device_token()?).bearer_auth(jwt);
+    if let Some(b) = body {
+        req = req.json(&b);
+    }
+    let (code, body) = send_within(req, Duration::from_secs(120)).await?;
+    if !(200..300).contains(&code) {
+        return Err(revoked_if_401(code, &body));
+    }
+    Ok(body)
+}
+
 /// Quiet update at launch: a newer PUBLISHED release is downloaded and installed in the
 /// background and takes effect the next time she opens the app. No prompt, no nudge.
 /// Signed with the updater key; an unsigned or tampered bundle is refused by the plugin.
@@ -223,8 +260,22 @@ pub fn run() {
             pair_wait,
             set_password,
             login,
-            me
+            me,
+            api
         ])
         .run(tauri::generate_context!())
         .expect("Career Compass could not start");
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn api_reaches_only_her_intake() {
+        assert!(super::allowed("POST", "/intake/message"));
+        assert!(super::allowed("GET", "/me"));
+        assert!(!super::allowed("GET", "/stark/status"));
+        assert!(!super::allowed("POST", "/intake/../stark/status"));
+        assert!(!super::allowed("DELETE", "/intake"));
+        assert!(!super::allowed("GET", "/intakeX"));
+    }
 }

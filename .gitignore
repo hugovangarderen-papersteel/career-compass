@@ -8,3 +8,4 @@ deploy/.env
 *.age
 node_modules/
 /crates/web/src-tauri/gen/
+**/dist-web/

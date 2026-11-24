@@ -21,6 +21,7 @@ fn app(pool: PgPool) -> Router {
         llm: None,
         eur_per_usd: 1.0,
         web_dir: None,
+        mock_model: false,
     })
 }
 

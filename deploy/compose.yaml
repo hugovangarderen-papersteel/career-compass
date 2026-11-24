@@ -1,4 +1,4 @@
-# DRAFT — not deployed. Runs on the lab server as its own Compose project, separate from the lab stack:
+# Runs on the lab server as its own Compose project, separate from the lab stack:
 #   docker compose -p career-compass --env-file deploy/.env -f deploy/compose.yaml up -d
 # Deploying needs the owner's go. Postgres has no published port; only the api is reachable.
 name: career-compass
@@ -21,6 +21,7 @@ services:
       retries: 10
 
   api:
+    image: career-compass-api:local
     build:
       context: ..
       dockerfile: deploy/Dockerfile
@@ -33,8 +34,23 @@ services:
       CC_JWT_SECRET: ${CC_JWT_SECRET:?set in deploy/.env}
       CC_ADMIN_TOKEN: ${CC_ADMIN_TOKEN:?set in deploy/.env}
       CC_BIND: 0.0.0.0:8080
+      CC_WEB_DIR: /srv/web
+      # Kompas: a real key in deploy/.env, or the canned test model for test accounts only:
+      #   CC_ANTHROPIC_API_KEY=mock  CC_ANTHROPIC_URL=http://mock:9000  CC_MOCK_MODEL=1  COMPOSE_PROFILES=mock
+      CC_ANTHROPIC_API_KEY: ${CC_ANTHROPIC_API_KEY:-}
+      CC_ANTHROPIC_URL: ${CC_ANTHROPIC_URL:-https://api.anthropic.com}
+      CC_MOCK_MODEL: ${CC_MOCK_MODEL:-0}
     networks: [cc]
     mem_limit: 256m
+
+  mock:
+    profiles: [mock]
+    image: career-compass-api:local # the api image, built once
+    depends_on: [api]
+    restart: unless-stopped
+    command: cc-mock-model
+    networks: [cc]
+    mem_limit: 64m
 
   tunnel:
     image: cloudflare/cloudflared:latest

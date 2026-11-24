@@ -40,6 +40,11 @@ async fn main() -> anyhow::Result<()> {
             .context("CC_EUR_PER_USD must be a positive number")?,
         Err(_) => 1.0,
     };
+    // CC_MOCK_MODEL=1: `llm` is the canned `cc-mock-model` service, answered to test accounts only.
+    let mock_model = std::env::var("CC_MOCK_MODEL").is_ok_and(|v| v.trim() == "1");
+    if mock_model {
+        tracing::warn!("CC_MOCK_MODEL=1: Kompas is the canned test model, test accounts only");
+    }
     let web_dir = std::env::var("CC_WEB_DIR").ok().map(std::path::PathBuf::from);
 
     let app = cc_api::app(cc_api::AppState {
@@ -49,6 +54,7 @@ async fn main() -> anyhow::Result<()> {
         llm,
         eur_per_usd,
         web_dir,
+        mock_model,
     });
     let listener = tokio::net::TcpListener::bind(&bind)
         .await
