@@ -18,6 +18,9 @@ fn app(pool: PgPool) -> Router {
         pool,
         jwt_secret: b"test-jwt-secret-0123456789abcdef0123".to_vec(),
         admin_token: ADMIN.into(),
+        llm: None,
+        eur_per_usd: 1.0,
+        web_dir: None,
     })
 }
 
@@ -252,9 +255,20 @@ async fn guards(pool: PgPool) {
         StatusCode::UNAUTHORIZED
     );
 
-    cc_db::log_llm_call(&pool, "test", "claude-haiku", 100, 50, 28.0)
-        .await
-        .unwrap();
+    cc_db::log_llm_call(
+        &pool,
+        &cc_db::LlmCall {
+            purpose: "test",
+            model: "claude-haiku",
+            tokens_in: 100,
+            tokens_out: 50,
+            cache_read: 0,
+            cache_write: 0,
+            cost_eur: 28.0,
+        },
+    )
+    .await
+    .unwrap();
     let (h, v) = admin();
     let (_, s) = call(&app, "GET", "/stark/status", &[(h, &v)], None).await;
     assert_eq!(s["level"], "red");

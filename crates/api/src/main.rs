@@ -21,10 +21,34 @@ async fn main() -> anyhow::Result<()> {
     let pool = cc_db::connect(&db_url).await.context("connect to Postgres")?;
     cc_db::migrate(&pool).await.context("run migrations")?;
 
+    // The model key lives only in the server .env; without it Kompas reports offline.
+    let llm = std::env::var("CC_ANTHROPIC_API_KEY")
+        .ok()
+        .filter(|k| !k.trim().is_empty())
+        .map(|k| {
+            let base = std::env::var("CC_ANTHROPIC_URL").unwrap_or_else(|_| "https://api.anthropic.com".into());
+            cc_llm::Client::new(&base, k.trim())
+        });
+    if llm.is_none() {
+        tracing::warn!("CC_ANTHROPIC_API_KEY not set: Kompas is offline");
+    }
+    let eur_per_usd = match std::env::var("CC_EUR_PER_USD") {
+        Ok(v) => v
+            .parse::<f64>()
+            .ok()
+            .filter(|x| *x > 0.0)
+            .context("CC_EUR_PER_USD must be a positive number")?,
+        Err(_) => 1.0,
+    };
+    let web_dir = std::env::var("CC_WEB_DIR").ok().map(std::path::PathBuf::from);
+
     let app = cc_api::app(cc_api::AppState {
         pool,
         jwt_secret: jwt_secret.into_bytes(),
         admin_token,
+        llm,
+        eur_per_usd,
+        web_dir,
     });
     let listener = tokio::net::TcpListener::bind(&bind)
         .await

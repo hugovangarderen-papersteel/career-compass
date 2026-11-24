@@ -1,6 +1,8 @@
 //! Career Compass domain types shared by the api, the worker and the desktop app.
 //! Numbers here come from the build spec v2 (§2b pairing, §10b cost cap).
 
+pub mod profile;
+
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 
@@ -139,6 +141,26 @@ pub struct DeviceSummary {
     pub last_seen: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+/// Who a model call is for. Her own work may run to 110 % of the cap so a conversation
+/// is never cut off mid-sentence; background jobs stop at 100 % (spec §10b).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Lane {
+    Hers,
+    Background,
+}
+
+/// Her lane may overrun the cap by this fraction (spec §10b: €33 on a €30 cap).
+pub const HER_OVERRUN: f64 = 0.10;
+
+/// Pre-call check: would `estimate_eur` on top of `spent_eur` stay inside the lane's limit?
+pub fn may_spend(spent_eur: f64, estimate_eur: f64, cap_eur: f64, lane: Lane) -> bool {
+    let limit = match lane {
+        Lane::Hers => cap_eur * (1.0 + HER_OVERRUN),
+        Lane::Background => cap_eur,
+    };
+    cap_eur > 0.0 && spent_eur + estimate_eur <= limit
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -160,6 +182,15 @@ mod tests {
         assert_eq!(usage_level(27.0, 30.0), UsageLevel::Amber); // exactly 90 %
         assert_eq!(usage_level(27.1, 30.0), UsageLevel::Red);
         assert_eq!(usage_level(1.0, 0.0), UsageLevel::Red);
+    }
+
+    #[test]
+    fn cap_lanes() {
+        assert!(may_spend(29.0, 0.5, 30.0, Lane::Background));
+        assert!(!may_spend(29.9, 0.2, 30.0, Lane::Background));
+        assert!(may_spend(32.5, 0.4, 30.0, Lane::Hers));
+        assert!(!may_spend(32.9, 0.2, 30.0, Lane::Hers));
+        assert!(!may_spend(0.0, 0.01, 0.0, Lane::Hers));
     }
 
     #[test]

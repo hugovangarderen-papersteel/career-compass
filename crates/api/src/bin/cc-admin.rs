@@ -22,6 +22,9 @@ enum Cmd {
         email: String,
         #[arg(long, default_value = "seeker")]
         role: String,
+        /// A test account (Hugo's dry runs): may reset its intake. Use a made-up address.
+        #[arg(long)]
+        test: bool,
     },
     /// Set the monthly cap in EUR.
     SetCap { eur: f64 },
@@ -34,10 +37,13 @@ async fn main() -> anyhow::Result<()> {
     cc_db::migrate(&pool).await?;
     match cli.cmd {
         Cmd::Migrate => println!("migrations up to date"),
-        Cmd::CreateUser { email, role } => {
+        Cmd::CreateUser { email, role, test } => {
             let role = cc_core::Role::parse(&role).context("role must be seeker or admin")?;
             let id = cc_db::create_user(&pool, &email, role).await?;
-            println!("created user {id}");
+            if test {
+                cc_db::mark_test_user(&pool, id).await?;
+            }
+            println!("created {}user {id}", if test { "test " } else { "" });
         }
         Cmd::SetCap { eur } => {
             anyhow::ensure!(eur.is_finite() && eur >= 0.0, "cap must be a non-negative number");

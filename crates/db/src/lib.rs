@@ -25,6 +25,8 @@ pub struct User {
     pub email: String,
     pub role: Role,
     pub password_hash: Option<String>,
+    /// Hugo's test accounts: may reset their intake. Real accounts never can.
+    pub is_test: bool,
 }
 
 pub async fn create_user(pool: &PgPool, email: &str, role: Role) -> Result<Uuid, Error> {
@@ -39,7 +41,7 @@ pub async fn create_user(pool: &PgPool, email: &str, role: Role) -> Result<Uuid,
 }
 
 pub async fn user_by_email(pool: &PgPool, email: &str) -> Result<Option<User>, Error> {
-    let row = sqlx::query("SELECT id, email, role, password_hash FROM users WHERE email = $1")
+    let row = sqlx::query("SELECT id, email, role, password_hash, is_test FROM users WHERE email = $1")
         .bind(email.trim().to_lowercase())
         .fetch_optional(pool)
         .await?;
@@ -47,7 +49,7 @@ pub async fn user_by_email(pool: &PgPool, email: &str) -> Result<Option<User>, E
 }
 
 pub async fn user_by_id(pool: &PgPool, id: Uuid) -> Result<Option<User>, Error> {
-    let row = sqlx::query("SELECT id, email, role, password_hash FROM users WHERE id = $1")
+    let row = sqlx::query("SELECT id, email, role, password_hash, is_test FROM users WHERE id = $1")
         .bind(id)
         .fetch_optional(pool)
         .await?;
@@ -58,6 +60,7 @@ fn user_from_row(r: sqlx::postgres::PgRow) -> User {
     User {
         id: r.get("id"),
         email: r.get("email"),
+        is_test: r.get("is_test"),
         role: Role::parse(r.get::<&str, _>("role")).unwrap_or(Role::Seeker),
         password_hash: r.get("password_hash"),
     }
@@ -232,24 +235,265 @@ pub async fn set_cap_eur(pool: &PgPool, cap: f64) -> Result<(), Error> {
     Ok(())
 }
 
-pub async fn log_llm_call(
-    pool: &PgPool,
-    purpose: &str,
-    model: &str,
-    tokens_in: i32,
-    tokens_out: i32,
-    cost_eur: f64,
-) -> Result<(), Error> {
+/// One metered model call (spec §10b). `tokens_in` counts every input token, cached or not.
+pub struct LlmCall<'a> {
+    pub purpose: &'a str,
+    pub model: &'a str,
+    pub tokens_in: i32,
+    pub tokens_out: i32,
+    pub cache_read: i32,
+    pub cache_write: i32,
+    pub cost_eur: f64,
+}
+
+pub async fn log_llm_call(pool: &PgPool, c: &LlmCall<'_>) -> Result<(), Error> {
     sqlx::query(
-        "INSERT INTO llm_calls (id, purpose, model, tokens_in, tokens_out, cost_eur) VALUES ($1, $2, $3, $4, $5, $6)",
+        "INSERT INTO llm_calls (id, purpose, model, tokens_in, tokens_out, cache_read, cache_write, cost_eur) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind(Uuid::new_v4())
-    .bind(purpose)
-    .bind(model)
-    .bind(tokens_in)
-    .bind(tokens_out)
-    .bind(cost_eur)
+    .bind(c.purpose)
+    .bind(c.model)
+    .bind(c.tokens_in)
+    .bind(c.tokens_out)
+    .bind(c.cache_read)
+    .bind(c.cache_write)
+    .bind(c.cost_eur)
     .execute(pool)
     .await?;
     Ok(())
+}
+
+pub async fn mark_test_user(pool: &PgPool, user: Uuid) -> Result<(), Error> {
+    sqlx::query("UPDATE users SET is_test = true WHERE id = $1")
+        .bind(user)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+// ---------- intake (spec §3) ----------
+
+pub struct IntakeSession {
+    pub id: Uuid,
+    pub phase: i16,
+    pub phases_done: Vec<i16>,
+    pub status: String,
+}
+
+/// Her latest intake, if she ever started one.
+pub async fn current_session(pool: &PgPool, user: Uuid) -> Result<Option<IntakeSession>, Error> {
+    let row = sqlx::query(
+        "SELECT id, phase, phases_done, status FROM intake_sessions WHERE user_id = $1 ORDER BY started_at DESC LIMIT 1",
+    )
+    .bind(user)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| IntakeSession {
+        id: r.get("id"),
+        phase: r.get("phase"),
+        phases_done: r.get("phases_done"),
+        status: r.get("status"),
+    }))
+}
+
+pub async fn create_session(pool: &PgPool, user: Uuid) -> Result<IntakeSession, Error> {
+    let id = Uuid::new_v4();
+    sqlx::query("INSERT INTO intake_sessions (id, user_id) VALUES ($1, $2)")
+        .bind(id)
+        .bind(user)
+        .execute(pool)
+        .await?;
+    Ok(IntakeSession {
+        id,
+        phase: 1,
+        phases_done: vec![],
+        status: "active".into(),
+    })
+}
+
+pub async fn save_session(pool: &PgPool, s: &IntakeSession) -> Result<(), Error> {
+    sqlx::query(
+        "UPDATE intake_sessions SET phase = $2, phases_done = $3, status = $4, updated_at = now(), \
+         ended_at = CASE WHEN $4 = 'approved' THEN now() ELSE ended_at END WHERE id = $1",
+    )
+    .bind(s.id)
+    .bind(s.phase)
+    .bind(&s.phases_done)
+    .bind(&s.status)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub struct Turn {
+    pub seq: i32,
+    pub speaker: String,
+    pub phase: i16,
+    pub text: String,
+}
+
+pub async fn turns(pool: &PgPool, session: Uuid) -> Result<Vec<Turn>, Error> {
+    let rows = sqlx::query("SELECT seq, speaker, phase, text FROM transcript_turns WHERE session_id = $1 ORDER BY seq")
+        .bind(session)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| Turn {
+            seq: r.get("seq"),
+            speaker: r.get("speaker"),
+            phase: r.get("phase"),
+            text: r.get("text"),
+        })
+        .collect())
+}
+
+/// Appends a turn and returns its number (the `T<n>` profile fields point at).
+pub async fn add_turn(pool: &PgPool, session: Uuid, speaker: &str, phase: i16, text: &str) -> Result<i32, Error> {
+    let row = sqlx::query(
+        "INSERT INTO transcript_turns (id, session_id, seq, speaker, phase, text) \
+         SELECT $1, $2, COALESCE(MAX(seq), 0) + 1, $3, $4, $5 FROM transcript_turns WHERE session_id = $2 \
+         RETURNING seq",
+    )
+    .bind(Uuid::new_v4())
+    .bind(session)
+    .bind(speaker)
+    .bind(phase)
+    .bind(text)
+    .fetch_one(pool)
+    .await?;
+    Ok(row.get("seq"))
+}
+
+/// Test accounts only (the caller checks `is_test`): wipes intake, profiles and documents.
+pub async fn reset_intake(pool: &PgPool, user: Uuid) -> Result<(), Error> {
+    let mut tx = pool.begin().await?;
+    for q in [
+        "DELETE FROM profiles WHERE user_id = $1",
+        "DELETE FROM intake_sessions WHERE user_id = $1",
+        "DELETE FROM documents WHERE user_id = $1",
+    ] {
+        sqlx::query(q).bind(user).execute(&mut *tx).await?;
+    }
+    tx.commit().await
+}
+
+pub struct ProfileRow {
+    pub version: i32,
+    pub status: String,
+    pub data: serde_json::Value,
+}
+
+pub async fn latest_profile(pool: &PgPool, user: Uuid) -> Result<Option<ProfileRow>, Error> {
+    let row =
+        sqlx::query("SELECT version, status, data FROM profiles WHERE user_id = $1 ORDER BY version DESC LIMIT 1")
+            .bind(user)
+            .fetch_optional(pool)
+            .await?;
+    Ok(row.map(|r| ProfileRow {
+        version: r.get("version"),
+        status: r.get("status"),
+        data: r.get("data"),
+    }))
+}
+
+/// Writes the draft: updates the open draft, or opens a new version after an approved one.
+pub async fn save_draft(pool: &PgPool, user: Uuid, session: Uuid, data: &serde_json::Value) -> Result<i32, Error> {
+    let mut tx = pool.begin().await?;
+    let latest =
+        sqlx::query("SELECT version, status FROM profiles WHERE user_id = $1 ORDER BY version DESC LIMIT 1 FOR UPDATE")
+            .bind(user)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let version = match latest {
+        Some(r) if r.get::<&str, _>("status") == "draft" => {
+            let v: i32 = r.get("version");
+            sqlx::query("UPDATE profiles SET data = $3, session_id = $4 WHERE user_id = $1 AND version = $2")
+                .bind(user)
+                .bind(v)
+                .bind(data)
+                .bind(session)
+                .execute(&mut *tx)
+                .await?;
+            v
+        }
+        other => {
+            let v = other.map(|r| r.get::<i32, _>("version") + 1).unwrap_or(1);
+            sqlx::query("INSERT INTO profiles (id, user_id, session_id, version, data) VALUES ($1, $2, $3, $4, $5)")
+                .bind(Uuid::new_v4())
+                .bind(user)
+                .bind(session)
+                .bind(v)
+                .bind(data)
+                .execute(&mut *tx)
+                .await?;
+            v
+        }
+    };
+    tx.commit().await?;
+    Ok(version)
+}
+
+/// Locks the open draft; returns its version, or None when there is no draft.
+pub async fn approve_profile(pool: &PgPool, user: Uuid) -> Result<Option<i32>, Error> {
+    let row = sqlx::query(
+        "UPDATE profiles SET status = 'approved', approved_at = now() \
+         WHERE user_id = $1 AND status = 'draft' RETURNING version",
+    )
+    .bind(user)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| r.get("version")))
+}
+
+pub struct Document {
+    pub id: Uuid,
+    pub seq: i32,
+    pub name: String,
+    pub body: String,
+    pub status: String,
+}
+
+pub async fn add_document(pool: &PgPool, user: Uuid, name: &str, body: &str) -> Result<Uuid, Error> {
+    let id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO documents (id, user_id, seq, name, body) \
+         SELECT $1, $2, COALESCE(MAX(seq), 0) + 1, $3, $4 FROM documents WHERE user_id = $2",
+    )
+    .bind(id)
+    .bind(user)
+    .bind(name)
+    .bind(body)
+    .execute(pool)
+    .await?;
+    Ok(id)
+}
+
+pub async fn documents(pool: &PgPool, user: Uuid) -> Result<Vec<Document>, Error> {
+    let rows = sqlx::query("SELECT id, seq, name, body, status FROM documents WHERE user_id = $1 ORDER BY seq")
+        .bind(user)
+        .fetch_all(pool)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| Document {
+            id: r.get("id"),
+            seq: r.get("seq"),
+            name: r.get("name"),
+            body: r.get("body"),
+            status: r.get("status"),
+        })
+        .collect())
+}
+
+/// Confirms or rejects one of HER documents; false when it is not hers.
+pub async fn set_document_status(pool: &PgPool, user: Uuid, id: Uuid, status: &str) -> Result<bool, Error> {
+    let r = sqlx::query("UPDATE documents SET status = $3 WHERE id = $1 AND user_id = $2")
+        .bind(id)
+        .bind(user)
+        .bind(status)
+        .execute(pool)
+        .await?;
+    Ok(r.rows_affected() == 1)
 }

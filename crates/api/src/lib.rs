@@ -33,10 +33,18 @@ pub struct AppState {
     pub pool: PgPool,
     pub jwt_secret: Vec<u8>,
     pub admin_token: String,
+    /// None when no model key is configured: Kompas then answers 503 `kompas_offline`.
+    pub llm: Option<cc_llm::Client>,
+    /// USD to EUR for the meter. 1.0 over-reads the spend, which keeps the cap conservative.
+    pub eur_per_usd: f64,
+    /// The phone web build (trunk dist), served at `/app/` when set.
+    pub web_dir: Option<std::path::PathBuf>,
 }
 
+mod intake;
+
 pub fn app(state: AppState) -> Router {
-    Router::new()
+    let mut r = Router::new()
         .route("/health", get(|| async { "ok" }))
         .route("/pair/request", post(pair_request))
         .route("/pair/{id}/claim", post(pair_claim))
@@ -47,8 +55,37 @@ pub fn app(state: AppState) -> Router {
         .route("/stark/status", get(stark_status))
         .route("/stark/pairing/{id}/decision", post(stark_decide))
         .route("/stark/devices/{id}/revoke", post(stark_revoke))
-        .layer(tower_http::trace::TraceLayer::new_for_http())
-        .with_state(state)
+        .merge(intake::routes());
+    if let Some(dir) = &state.web_dir {
+        r = r
+            .route("/app", get(|| async { axum::response::Redirect::permanent("/app/") }))
+            .nest_service("/app/", web_app(dir));
+    }
+    r.layer(tower_http::trace::TraceLayer::new_for_http()).with_state(state)
+}
+
+/// The phone web build: static files with strict headers. Every api call it makes goes
+/// through the same pairing gate and login as the desktop app; this only serves the page.
+fn web_app(dir: &std::path::Path) -> Router {
+    use axum::http::header::{HeaderName, HeaderValue};
+    use tower_http::set_header::SetResponseHeaderLayer;
+    let files =
+        tower_http::services::ServeDir::new(dir).fallback(tower_http::services::ServeFile::new(dir.join("index.html")));
+    let h = |name: &'static str, value: &'static str| {
+        SetResponseHeaderLayer::overriding(HeaderName::from_static(name), HeaderValue::from_static(value))
+    };
+    Router::new()
+        .fallback_service(files)
+        // trunk's loader is one inline module script; everything else must come from here.
+        .layer(h(
+            "content-security-policy",
+            "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; \
+             style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; \
+             frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
+        ))
+        .layer(h("x-content-type-options", "nosniff"))
+        .layer(h("referrer-policy", "no-referrer"))
+        .layer(h("cache-control", "no-cache"))
 }
 
 // ---------- errors ----------
@@ -63,6 +100,10 @@ pub enum ApiError {
     Gone(&'static str),
     Conflict(&'static str),
     TooMany,
+    /// A real account asking for a test-only action.
+    Forbidden,
+    /// Kompas cannot answer now: `kompas_offline`, `cap_reached`, `profile_failed`.
+    Unavailable(&'static str),
     Internal,
 }
 
@@ -76,6 +117,8 @@ impl IntoResponse for ApiError {
             ApiError::Gone(m) => (StatusCode::GONE, m),
             ApiError::Conflict(m) => (StatusCode::CONFLICT, m),
             ApiError::TooMany => (StatusCode::TOO_MANY_REQUESTS, "too_many_pending"),
+            ApiError::Forbidden => (StatusCode::FORBIDDEN, "forbidden"),
+            ApiError::Unavailable(m) => (StatusCode::SERVICE_UNAVAILABLE, m),
             ApiError::Internal => (StatusCode::INTERNAL_SERVER_ERROR, "internal"),
         };
         (code, Json(json!({ "error": msg }))).into_response()
@@ -328,7 +371,7 @@ async fn me(State(st): State<AppState>, h: HeaderMap) -> ApiResult<Json<serde_js
     let u = cc_db::user_by_id(&st.pool, c.sub)
         .await?
         .ok_or(ApiError::Unauthorized)?;
-    Ok(Json(json!({ "email": u.email, "role": u.role })))
+    Ok(Json(json!({ "email": u.email, "role": u.role, "is_test": u.is_test })))
 }
 
 // ---------- STARK ----------
