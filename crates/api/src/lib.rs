@@ -39,8 +39,9 @@ pub struct AppState {
     pub eur_per_usd: f64,
     /// The phone web build (trunk dist), served at `/app/` when set.
     pub web_dir: Option<std::path::PathBuf>,
-    /// True when `llm` points at the canned test model (`cc-mock-model`): test accounts only.
-    pub mock_model: bool,
+    /// Kompas answers test accounts only: set while `llm` is the canned test model
+    /// (`cc-mock-model`) and while a phase is on the test track before Hugo's go.
+    pub test_only: bool,
 }
 
 mod intake;

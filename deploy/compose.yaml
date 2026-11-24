@@ -40,6 +40,8 @@ services:
       CC_ANTHROPIC_API_KEY: ${CC_ANTHROPIC_API_KEY:-}
       CC_ANTHROPIC_URL: ${CC_ANTHROPIC_URL:-https://api.anthropic.com}
       CC_MOCK_MODEL: ${CC_MOCK_MODEL:-0}
+      # Test track: real accounts see Kompas offline until Hugo's go sets this to 0.
+      CC_INTAKE_TEST_ONLY: ${CC_INTAKE_TEST_ONLY:-1}
     networks: [cc]
     mem_limit: 256m
 

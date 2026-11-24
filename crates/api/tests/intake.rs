@@ -114,7 +114,7 @@ fn app(pool: PgPool, llm: Option<String>) -> Router {
         llm: llm.map(|u| cc_llm::Client::new(&u, "test-key")),
         eur_per_usd: 1.0,
         web_dir: None,
-        mock_model: false,
+        test_only: false,
     })
 }
 
@@ -478,7 +478,7 @@ async fn live_dummy(pool: PgPool) {
         llm: Some(cc_llm::Client::new("https://api.anthropic.com", &key)),
         eur_per_usd: 1.0,
         web_dir: None,
-        mock_model: false,
+        test_only: false,
     };
     let app = cc_api::app(st);
     let h = login(&app, "dummy@example.org").await;
@@ -550,7 +550,7 @@ async fn mock_model_answers_test_accounts_only(pool: PgPool) {
         llm: Some(cc_llm::Client::new(&url, "mock")),
         eur_per_usd: 1.0,
         web_dir: None,
-        mock_model: true,
+        test_only: true,
     });
 
     let real = login(&app, "real@example.org").await;

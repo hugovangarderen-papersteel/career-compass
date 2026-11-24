@@ -42,8 +42,11 @@ async fn main() -> anyhow::Result<()> {
     };
     // CC_MOCK_MODEL=1: `llm` is the canned `cc-mock-model` service, answered to test accounts only.
     let mock_model = std::env::var("CC_MOCK_MODEL").is_ok_and(|v| v.trim() == "1");
-    if mock_model {
-        tracing::warn!("CC_MOCK_MODEL=1: Kompas is the canned test model, test accounts only");
+    // CC_INTAKE_TEST_ONLY (default on): the intake stays on the test track, real accounts
+    // see Kompas offline. Hugo's go for her flips it to 0 in deploy/.env.
+    let test_only = mock_model || std::env::var("CC_INTAKE_TEST_ONLY").map_or(true, |v| v.trim() != "0");
+    if test_only {
+        tracing::warn!("Kompas answers test accounts only (CC_INTAKE_TEST_ONLY / CC_MOCK_MODEL)");
     }
     let web_dir = std::env::var("CC_WEB_DIR").ok().map(std::path::PathBuf::from);
 
@@ -54,7 +57,7 @@ async fn main() -> anyhow::Result<()> {
         llm,
         eur_per_usd,
         web_dir,
-        mock_model,
+        test_only,
     });
     let listener = tokio::net::TcpListener::bind(&bind)
         .await

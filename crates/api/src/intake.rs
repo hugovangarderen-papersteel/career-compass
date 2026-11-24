@@ -87,8 +87,7 @@ async fn view(st: &AppState, user: &cc_db::User) -> ApiResult<Json<Value>> {
         "sections": SECTIONS.iter().map(|s| json!({"key": s.0, "title": s.1, "fields": s.2})).collect::<Vec<_>>(),
         "pending_docs": pending_docs,
         "is_test": user.is_test,
-        "online": st.llm.is_some() && (user.is_test || !st.mock_model),
-        "mock": st.mock_model,
+        "online": st.llm.is_some() && (user.is_test || !st.test_only),
     })))
 }
 
@@ -101,8 +100,8 @@ async fn view_route(State(st): State<AppState>, h: HeaderMap) -> ApiResult<Json<
 
 async fn ask(st: &AppState, user: &cc_db::User, req: &ToolRequest) -> ApiResult<Value> {
     let llm = st.llm.as_ref().ok_or(ApiError::Unavailable("kompas_offline"))?;
-    // The canned test model answers test accounts only; a real account never sees its words.
-    if st.mock_model && !user.is_test {
+    // Test track (or the canned test model): a real account gets no Kompas until Hugo's go.
+    if st.test_only && !user.is_test {
         return Err(ApiError::Unavailable("kompas_offline"));
     }
     let spent = cc_db::month_spend(&st.pool).await?;
