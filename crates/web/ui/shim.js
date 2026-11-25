@@ -75,11 +75,13 @@
     return { ok: true };
   }
 
-  // Same rule as `allowed` in src-tauri: her intake, who she is and the companies.
+  // Same rule as `allowed` in src-tauri: her intake, who she is, the companies, her
+  // matches, outreach and pipeline.
+  const EXACT = ["/me", "/intake", "/companies", "/admin/companies", "/matching", "/pipeline", "/contacts"];
+  const PREFIX = ["/intake/", "/admin/companies/", "/matching/", "/outreach/", "/pipeline/", "/suggestions/"];
   const allowed = (m, p) =>
     (m === "GET" || m === "POST") && !p.includes("..") && !p.includes("?") &&
-    (["/me", "/intake", "/companies", "/admin/companies"].includes(p) ||
-      p.startsWith("/intake/") || p.startsWith("/admin/companies/"));
+    (EXACT.includes(p) || PREFIX.some((x) => p.startsWith(x)));
 
   async function authed(method, path, body, ms) {
     const jwt = ss.getItem("cc-session");

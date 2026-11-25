@@ -197,15 +197,31 @@ async fn me(session: tauri::State<'_, Session>) -> Result<Value, String> {
     Ok(body)
 }
 
-/// The only paths the window may reach through `api`: her intake, who she is and the
-/// companies (the server keeps the admin views to the admin role).
+/// The only paths the window may reach through `api`: her intake, who she is, the
+/// companies, her matches, outreach and pipeline (the server keeps the admin views to
+/// the admin role).
 fn allowed(method: &str, path: &str) -> bool {
+    const EXACT: [&str; 7] = [
+        "/me",
+        "/intake",
+        "/companies",
+        "/admin/companies",
+        "/matching",
+        "/pipeline",
+        "/contacts",
+    ];
+    const PREFIX: [&str; 6] = [
+        "/intake/",
+        "/admin/companies/",
+        "/matching/",
+        "/outreach/",
+        "/pipeline/",
+        "/suggestions/",
+    ];
     matches!(method, "GET" | "POST")
         && !path.contains("..")
         && !path.contains('?')
-        && (["/me", "/intake", "/companies", "/admin/companies"].contains(&path)
-            || path.starts_with("/intake/")
-            || path.starts_with("/admin/companies/"))
+        && (EXACT.contains(&path) || PREFIX.iter().any(|p| path.starts_with(p)))
 }
 
 /// One call to her own data on the server. Making her profile can take a minute, hence 120 s.
@@ -283,5 +299,21 @@ mod tests {
         assert!(super::allowed("POST", "/companies"));
         assert!(super::allowed("POST", "/admin/companies/abc/enrich"));
         assert!(!super::allowed("GET", "/admin/users"));
+        // Phase 3 + 4 screens.
+        assert!(super::allowed("GET", "/matching"));
+        assert!(super::allowed("GET", "/matching/companies/abc"));
+        assert!(super::allowed("POST", "/matching/feedback"));
+        assert!(super::allowed("GET", "/outreach/companies/abc/facts"));
+        assert!(super::allowed("POST", "/outreach/drafts"));
+        assert!(super::allowed("POST", "/outreach/drafts/abc/sent"));
+        assert!(super::allowed("GET", "/pipeline"));
+        assert!(super::allowed("POST", "/pipeline/abc/stage"));
+        assert!(super::allowed("POST", "/suggestions/abc"));
+        assert!(super::allowed("GET", "/contacts"));
+        assert!(!super::allowed("GET", "/outreach"));
+        assert!(!super::allowed("GET", "/pipelineX"));
+        assert!(!super::allowed("GET", "/pipeline/../stark/status"));
+        assert!(!super::allowed("GET", "/matching?all=1"));
+        assert!(!super::allowed("DELETE", "/outreach/drafts/abc"));
     }
 }
