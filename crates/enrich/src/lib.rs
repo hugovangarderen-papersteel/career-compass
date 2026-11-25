@@ -279,7 +279,8 @@ fn unescape(s: &str) -> String {
     while let Some(a) = rest.find('&') {
         out.push_str(&rest[..a]);
         rest = &rest[a..];
-        let end = rest[..rest.len().min(10)].find(';');
+        // Look for ';' within the next 10 characters (char-safe: pages carry U+202F and friends).
+        let end = rest.char_indices().take(10).find(|&(_, c)| c == ';').map(|(i, _)| i);
         let ent = end.map(|e| &rest[1..e]);
         let ch = match ent {
             Some("amp") => Some('&'),
@@ -457,6 +458,19 @@ mod tests {
             "/a/b.pdf.html"
         ));
         assert!(robots_allows("User-agent: *\nDisallow:\n", AGENT, "/x"));
+    }
+
+    #[test]
+    fn unescape_multibyte_near_ampersand() {
+        // Zivver's page, 2026-11-25: a narrow no-break space inside the 10-byte window panicked.
+        // Same layout as the crash: '&', 8 bytes, then U+202F at bytes 9..12 of the window.
+        assert_eq!(unescape("a &abcdefgh\u{202f} b"), "a &abcdefgh\u{202f} b");
+        assert_eq!(unescape("€&amp;€ &#x20AC; &é;"), "€&€ € &é;");
+        // U+202F is whitespace, so page_text folds it like any space.
+        assert_eq!(
+            page_text("<p>Prijs&\u{202f}9\u{202f}000&nbsp;euro</p>"),
+            "Prijs& 9 000 euro"
+        );
     }
 
     #[test]

@@ -57,16 +57,27 @@ enum Outcome {
 
 /// Runs forever: takes due jobs, sleeps 30 s when there are none.
 pub async fn run(w: Worker) {
+    let w = std::sync::Arc::new(w);
     let _ = cc_db::requeue_running(&w.pool).await;
     let _ = cc_db::enqueue(&w.pool, "refresh_signals", json!({}), Utc::now() + Duration::days(7)).await;
     loop {
         match cc_db::claim_job(&w.pool).await {
             Ok(Some(job)) => {
-                if let Err(e) = w.handle(&job).await {
-                    tracing::warn!("job {} ({}) failed on the database: {e}", job.id, job.kind);
+                // Each job in its own task: a panic on one odd page fails that job, not the worker.
+                let (jw, id, kind, company) = (w.clone(), job.id, job.kind.clone(), job.payload["company_id"].clone());
+                let res = match tokio::spawn(async move { jw.handle(&job).await }).await {
+                    Ok(r) => r,
+                    Err(p) => {
+                        tracing::error!("job {id} ({kind}) panicked: {p}");
+                        let _ = w.fail_panicked(id, &company).await;
+                        continue;
+                    }
+                };
+                if let Err(e) = res {
+                    tracing::warn!("job {id} ({kind}) failed on the database: {e}");
                     let _ = cc_db::end_job(
                         &w.pool,
-                        job.id,
+                        id,
                         Some("database error"),
                         Some(Utc::now() + Duration::minutes(10)),
                         false,
@@ -84,6 +95,21 @@ pub async fn run(w: Worker) {
 }
 
 impl Worker {
+    /// A job whose task panicked: failed for good (a retry would hit the same page), and its
+    /// company shows why instead of hanging on 'running'.
+    async fn fail_panicked(&self, job: Uuid, company: &Value) -> Result<(), sqlx::Error> {
+        const ERR: &str = "internal error while reading the site";
+        cc_db::end_job(&self.pool, job, Some(ERR), None, false).await?;
+        if let Some(id) = company.as_str().and_then(|s| s.parse::<Uuid>().ok()) {
+            sqlx::query("UPDATE companies SET status = 'failed', last_error = $2 WHERE id = $1")
+                .bind(id)
+                .bind(ERR)
+                .execute(&self.pool)
+                .await?;
+        }
+        Ok(())
+    }
+
     async fn handle(&self, job: &cc_db::Job) -> Result<(), sqlx::Error> {
         if job.kind == "refresh_signals" {
             // Weekly: re-read every site (unchanged pages cost nothing); a full re-extraction monthly.
