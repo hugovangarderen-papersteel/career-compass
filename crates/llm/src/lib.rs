@@ -129,7 +129,7 @@ impl ToolRequest {
             }
         }
         if msgs.first().map(|m| m.0) != Some(Role::User) {
-            msgs.insert(0, (Role::User, "(Het gesprek begint.)".into()));
+            msgs.insert(0, (Role::User, "(The conversation begins.)".into()));
         }
         let last = msgs.len() - 1;
         let messages: Vec<Value> = msgs
@@ -314,7 +314,7 @@ mod tests {
     fn req(msgs: Vec<Msg>) -> ToolRequest {
         ToolRequest {
             model: Model::Sonnet,
-            system_static: "vast".into(),
+            system_static: "fixed".into(),
             system_dynamic: "".into(),
             messages: msgs,
             tool_name: "t".into(),
@@ -329,7 +329,7 @@ mod tests {
         let b = req(vec![
             Msg {
                 role: Role::Assistant,
-                text: "Hoi".into(),
+                text: "Hi".into(),
             },
             Msg {
                 role: Role::User,
@@ -378,10 +378,10 @@ mod tests {
 
     #[test]
     fn parses_json_answer_and_usage() {
-        let v = json!({"stop_reason": "end_turn", "content": [{"type": "text", "text": "{\"message\": \"Hoi\"}"}],
+        let v = json!({"stop_reason": "end_turn", "content": [{"type": "text", "text": "{\"message\": \"Hi\"}"}],
             "usage": {"input_tokens": 10, "output_tokens": 20, "cache_creation_input_tokens": 1000, "cache_read_input_tokens": 2000}});
         let (input, u) = parse_response(&v, "t").unwrap();
-        assert_eq!(input["message"], "Hoi");
+        assert_eq!(input["message"], "Hi");
         assert_eq!(u.prompt_tokens(), 3010);
         // Sonnet: 10*2 + 1000*2.5 + 2000*0.2 + 20*10 = 3120 per Mtok
         assert!((u.cost_usd(Model::Sonnet) - 0.00312).abs() < 1e-12);

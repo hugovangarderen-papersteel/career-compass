@@ -1,4 +1,4 @@
-//! The intake ("Praat met Kompas") end to end against real Postgres and a mock model server.
+//! The intake ("Talk to Kompas") end to end against real Postgres and a mock model server.
 //! All data is made up; no real model is called.
 
 use std::sync::{Arc, Mutex};
@@ -18,14 +18,14 @@ const ADMIN: &str = "test-admin-token-0123456789abcdef0123";
 
 /// Her answers, one per phase. Full sentences, so the voice sample can quote them.
 const ANSWERS: [&str; 8] = [
-    "Ik ben Anna en ik woon in Utrecht.",
-    "Ik werkte tien jaar als programmamanager bij een ziekenhuisgroep.",
-    "Ik heb een team van twaalf mensen door een fusie geleid zonder dat er iemand vertrok.",
-    "Ik krijg energie van mensen verbinden die elkaar eerst niet verstonden.",
-    "Ik zoek een rol in de zorgtechnologie waar ik iets bouw.",
-    "Maximaal drie kwartier reizen en 32 uur per week.",
-    "Ik heb een jaar voor mijn vader gezorgd.",
-    "Dat klopt zo.",
+    "I am Anna and I live in Utrecht.",
+    "I worked for ten years as a programme manager at a hospital group.",
+    "I led a team of twelve people through a merger without anyone leaving.",
+    "I get energy from connecting people who did not understand each other at first.",
+    "I am looking for a role in care technology where I build something.",
+    "At most three quarters of an hour of travel and 32 hours a week.",
+    "I spent a year caring for my father.",
+    "That is right.",
 ];
 
 type Seen = Arc<Mutex<Vec<Value>>>;
@@ -56,14 +56,14 @@ async fn mock_model() -> (String, Seen) {
                     ""
                 };
                 let input = match tool {
-                    "kompas_turn" => json!({"message": "Vertel eens, wat gebeurde er toen?", "phase_complete": true}),
+                    "kompas_turn" => json!({"message": "Tell me, what happened then?", "phase_complete": true}),
                     "save_stories" => json!({
-                        "timeline": [{"role": "programmamanager", "org": "ziekenhuisgroep", "source_ids": ["T4"]}],
-                        "evidence": [{"id": "E1", "title": "Fusie", "situation": "fusie", "task": "team houden",
-                            "action": "verbinden", "result": "niemand vertrok", "skills": ["leiderschap"], "source_ids": ["T6"]},
-                            {"id": "E2", "title": "Verzonnen", "situation": "x", "task": "x", "action": "x",
+                        "timeline": [{"role": "programme manager", "org": "hospital group", "source_ids": ["T4"]}],
+                        "evidence": [{"id": "E1", "title": "Merger", "situation": "merger", "task": "keep the team",
+                            "action": "connecting", "result": "nobody left", "skills": ["leadership"], "source_ids": ["T6"]},
+                            {"id": "E2", "title": "Made up", "situation": "x", "task": "x", "action": "x",
                             "result": "x", "skills": [], "source_ids": ["T99"]}],
-                        "strengths": [{"skill": "verbinden", "rank": 5, "evidence_ids": ["E1"], "source_ids": ["T8"]}],
+                        "strengths": [{"skill": "connecting people", "rank": 5, "evidence_ids": ["E1"], "source_ids": ["T8"]}],
                         "languages": [], "anti_prefs": [], "work_style": []
                     }),
                     // As the strict schema returns it: every field present, unmentioned ones empty or null.
@@ -72,19 +72,19 @@ async fn mock_model() -> (String, Seen) {
                         "max_travel": null, "hours_per_week": null, "work_mode": null, "start_date": null,
                         "subsectors": [{"value": "care_tech", "weight": 0.9, "source_ids": ["T10"]}],
                         "home_base": {"city": "Utrecht", "source_ids": ["T2"]},
-                        "gap_framing": {"text": "Een jaar zorg voor mijn vader.", "source_ids": ["T14"]}
+                        "gap_framing": {"text": "A year caring for my father.", "source_ids": ["T14"]}
                     }),
                     "write_pitch" => json!({
-                        "pitch": {"text": "Ik verbind mensen en bouw zorg die werkt.", "source_ids": ["T6", "T8"]},
+                        "pitch": {"text": "I connect people and build care that works.", "source_ids": ["T6", "T8"]},
                         "voice_sample": [
                             {"text": ANSWERS[2], "source_ids": ["T6"]},
                             {"text": ANSWERS[3], "source_ids": ["T8"]},
                             {"text": ANSWERS[4], "source_ids": ["T10"]},
-                            {"text": "Ik ben de beste manager van Nederland.", "source_ids": ["T6"]}
+                            {"text": "I am the best manager in the Netherlands.", "source_ids": ["T6"]}
                         ]
                     }),
                     "revise_section" => json!({"updated": {
-                        "gap_framing": {"text": "Een jaar mantelzorg, bewust gekozen.", "source_ids": ["T18"]}
+                        "gap_framing": {"text": "A year of family caregiving, chosen deliberately.", "source_ids": ["T18"]}
                     }}),
                     _ => return (StatusCode::BAD_REQUEST, Json(json!({"error": {"type": "unknown_tool"}}))),
                 };
@@ -153,7 +153,7 @@ async fn login(app: &Router, email: &str) -> Vec<(String, String)> {
         "POST",
         "/pair/request",
         &[],
-        Some(json!({"device_name": "Testtelefoon", "public_key": pk})),
+        Some(json!({"device_name": "Test phone", "public_key": pk})),
     )
     .await;
     let id = v["id"].as_str().unwrap().to_string();
@@ -240,7 +240,7 @@ async fn full_intake_resume_playback_approve(pool: PgPool) {
     let app2 = self::app(pool.clone(), Some(url));
     let (_, v) = call(&app2, "GET", "/intake", &h, None).await;
     assert_eq!(v["phase"], 8);
-    assert_eq!(v["phase_name"], "Terugblik");
+    assert_eq!(v["phase_name"], "Looking back");
     assert_eq!(v["turns"].as_array().unwrap().len(), 15);
     assert_eq!(v["turns"][1]["text"], ANSWERS[0]);
     let (c, _) = call(&app2, "POST", "/intake/message", &h, Some(json!({"text": ANSWERS[7]}))).await;
@@ -268,13 +268,13 @@ async fn full_intake_resume_playback_approve(pool: PgPool) {
         "POST",
         "/intake/correct",
         &h,
-        Some(json!({"section": "gap", "text": "Noem het mantelzorg, dat was een bewuste keuze."})),
+        Some(json!({"section": "gap", "text": "Call it family caregiving, that was a deliberate choice."})),
     )
     .await;
     assert_eq!(c, StatusCode::OK, "{v}");
     assert_eq!(
         v["profile"]["data"]["gap_framing"]["text"],
-        "Een jaar mantelzorg, bewust gekozen."
+        "A year of family caregiving, chosen deliberately."
     );
     assert_eq!(v["profile"]["data"]["gap_framing"]["source_ids"][0], "T18");
     assert_eq!(
@@ -377,7 +377,7 @@ async fn real_account_guards(pool: PgPool) {
         "POST",
         "/intake/documents",
         &her,
-        Some(json!({"name": "cv.txt", "body": "Programmamanager, 2014-2024."})),
+        Some(json!({"name": "cv.txt", "body": "Programme manager, 2014-2024."})),
     )
     .await;
     assert_eq!(c, StatusCode::OK, "{d}");
@@ -409,23 +409,23 @@ async fn real_account_guards(pool: PgPool) {
 
 /// Made-up seeker for the live run. A cheap model plays her from this sheet, so she answers
 /// what Kompas actually asks. None of it is about a real person.
-const PERSONA: &str = "Je speelt Anna (52, Utrecht) in een gesprek met Kompas, een loopbaangesprek in een app. \
-Antwoord als Anna, in het Nederlands, in één tot vier natuurlijke zinnen, alleen op wat gevraagd wordt. \
-Verzin geen feiten buiten dit blad; weet Anna iets niet, zeg dat. Vraagt Kompas iets te kiezen of te rangschikken, doe dat. \
-Zegt Kompas dat het gesprek klaar is of dat ze op 'Maak mijn profiel' kan drukken, antwoord dan: 'Dank je, ik ben klaar.'\n\
-Feiten: verpleegkundige 1996-2004 in een regionaal ziekenhuis. Teamleider cardiologie 2004-2010, team van 20. \
-Programmamanager bij Medivista (fabrikant van patiëntmonitoring) 2010-2018, team van 15, klanten waren ziekenhuizen. \
-Hoofd implementatie bij Medivista 2018-2022: nieuwe monitoringsystemen invoeren in 12 ziekenhuizen. \
-Van 2022 tot 2024 thuis voor de zorg van haar moeder; hield vakbladen bij en deed een online cursus over de MDR. \
-Verhalen: (1) bij één ziekenhuis wilde de verpleging het systeem niet; zij draaide drie weken nachtdiensten mee, liet het aanpassen, \
-na twee maanden gebruikte 90 procent het dagelijks. (2) een implementatie die zes maanden achterliep knipte ze in drie stappen, \
-binnen vier maanden weer op schema. (3) bij een fusie van twee implementatieteams vertrok niemand in het eerste jaar. \
-(4) ze schreef de trainingsopzet die daarna in alle 12 ziekenhuizen werd gebruikt, opleidingstijd van 2 dagen naar 1. \
-Sterktes: vertalen tussen techniek en werkvloer, mensen meekrijgen, grote trajecten in kleine stappen knippen, rustig blijven onder druk. \
-Energie: mensen verbinden, iets zien werken op de afdeling. Kost energie: vergaderen zonder besluit, politiek. \
-Zoekt: implementatie- of productrol, liefst vast of parttime, scale-up of middelgroot bedrijf, digitale zorg of zorgtechnologie, \
-patiëntveiligheid raakt haar het meest. Maximaal 45 minuten reizen met trein of auto, 28 tot 32 uur, hybride, kan per maart, \
-Nederlands en goed Engels. Pauze-zin die ze goed vindt: twee jaar mantelzorg, en ze bleef bij in haar vak.";
+const PERSONA: &str = "You play Anna (52, Utrecht) in a conversation with Kompas, a career conversation in an app. \
+Answer as Anna, in English, in one to four natural sentences, only to what is asked. \
+Invent no facts beyond this sheet; if Anna does not know something, say so. If Kompas asks you to choose or rank something, do it. \
+If Kompas says the conversation is finished or that she can press 'Make my profile', answer: 'Thank you, I am done.'\n\
+Facts: nurse 1996-2004 in a regional hospital. Team leader cardiology 2004-2010, team of 20. \
+Programme manager at Medivista (maker of patient monitoring) 2010-2018, team of 15, the clients were hospitals. \
+Head of implementation at Medivista 2018-2022: introducing new monitoring systems in 12 hospitals. \
+From 2022 to 2024 at home caring for her mother; kept up with trade journals and took an online course on the MDR. \
+Stories: (1) at one hospital the nursing staff did not want the system; she worked night shifts alongside them for three weeks, had it adjusted, \
+and after two months 90 percent used it daily. (2) she cut an implementation that was six months behind into three steps, \
+and within four months it was back on schedule. (3) when two implementation teams merged, nobody left in the first year. \
+(4) she wrote the training plan that was then used in all 12 hospitals, training time from 2 days to 1. \
+Strengths: translating between technology and the work floor, bringing people along, cutting big projects into small steps, staying calm under pressure. \
+Energy: connecting people, seeing something work on the ward. Costs energy: meetings without a decision, politics. \
+Looking for: an implementation or product role, preferably permanent or part-time, a scale-up or mid-sized company, digital health or care technology; \
+patient safety moves her most. At most 45 minutes of travel by train or car, 28 to 32 hours, hybrid, can start in March, \
+Dutch and good English. The break sentence she likes: two years of family caregiving, and she kept up with her field.";
 
 /// Anna's next answer to the conversation so far (Kompas speaks last).
 async fn dummy_answer(llm: &cc_llm::Client, turns: &Value) -> (String, f64) {
@@ -494,7 +494,7 @@ async fn live_dummy(pool: PgPool) {
         dummy_usd += usd;
         let (mut c, mut nv) = call(&app, "POST", "/intake/message", &h, Some(json!({"text": a}))).await;
         if c == StatusCode::SERVICE_UNAVAILABLE {
-            // What her "Probeer opnieuw" does: her answer is saved, ask Kompas again.
+            // What her "Try again" does: her answer is saved, ask Kompas again.
             (c, nv) = call(&app, "POST", "/intake/message", &h, Some(json!({"text": ""}))).await;
         }
         assert_eq!(c, StatusCode::OK, "{nv}");

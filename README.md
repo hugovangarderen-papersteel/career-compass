@@ -14,7 +14,7 @@ committed. Configuration lives in the server's `.env`, which is git-ignored.
 | `crates/db` | Postgres queries and migrations (`crates/db/migrations`) |
 | `crates/api` | `cc-api` server and `cc-admin` CLI |
 | `crates/worker`, `enrich`, `llm`, `embed` | Empty in Phase 0; filled in later phases |
-| `crates/web/ui` | Leptos window (Dutch), built to wasm by trunk |
+| `crates/web/ui` | Leptos window (English), built to wasm by trunk |
 | `crates/web/src-tauri` | Tauri shell: Keychain, pairing, login |
 | `deploy/` | Docker Compose for the server host (draft) |
 

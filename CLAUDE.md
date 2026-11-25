@@ -21,4 +21,4 @@ This is a private app for one person. It is separate from every other project on
   owner. `cargo deny check licenses` must pass.
 - `cargo fmt --all`, `cargo clippy --all-targets -- -D warnings` and `cargo test` must be green
   before a push. Code is done only when GitHub CI is green for the pushed commit.
-- UI copy is Dutch, plain and warm. The word "STARK" never appears in the app.
+- UI copy is English, plain and warm (Hugo's ruling 2026-11-25: she prefers English); Kompas switches to Dutch on request. The word "STARK" never appears in the app.

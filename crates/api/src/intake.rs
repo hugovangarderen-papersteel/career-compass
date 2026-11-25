@@ -1,4 +1,4 @@
-//! "Praat met Kompas": the intake conversation (spec §3) and her profile (spec §4).
+//! "Talk to Kompas": the intake conversation (spec §3) and her profile (spec §4).
 //!
 //! Every route needs her device token AND her session; every query is filtered by her user id.
 //! Her answer is saved before Kompas is asked, so nothing she typed is ever lost. Every model
@@ -139,7 +139,7 @@ fn transcript(turns: &[Turn]) -> String {
     turns
         .iter()
         .map(|t| {
-            let who = if t.speaker == "seeker" { "Zij" } else { "Kompas" };
+            let who = if t.speaker == "seeker" { "She" } else { "Kompas" };
             format!("[T{}] {who}: {}", t.seq, t.text)
         })
         .collect::<Vec<_>>()
@@ -181,20 +181,20 @@ fn valid_ids(turns: &[Turn], doc_ids: &[String]) -> HashSet<String> {
 
 fn kompas_request(turns: &[Turn], p: &Progress, docs: &str) -> ToolRequest {
     let done = if p.done.is_empty() {
-        "nog geen".to_string()
+        "none yet".to_string()
     } else {
         p.done.iter().map(|d| d.to_string()).collect::<Vec<_>>().join(", ")
     };
     let docs = if docs.is_empty() {
-        "Ze heeft (nog) geen documenten gedeeld.".to_string()
+        "She has not shared any documents (yet).".to_string()
     } else {
-        format!("## Documenten die zij bevestigde\n{docs}")
+        format!("## Documents she confirmed\n{docs}")
     };
     ToolRequest {
         model: Model::Sonnet,
         system_static: KOMPAS.to_string(),
         system_dynamic: format!(
-            "## Waar het gesprek nu is\nHuidige fase: {} ({}). Gedekte fases: {done}.\n\n{docs}",
+            "## Where the conversation is now\nCurrent phase: {} ({}). Phases covered: {done}.\n\n{docs}",
             p.phase,
             profile::phase_name(p.phase)
         ),
@@ -210,12 +210,12 @@ fn kompas_request(turns: &[Turn], p: &Progress, docs: &str) -> ToolRequest {
             })
             .collect(),
         tool_name: "kompas_turn".into(),
-        tool_description: "Je volgende bericht aan haar, en of de huidige fase nu genoeg gedekt is.".into(),
+        tool_description: "Your next message to her, and whether the current phase is now covered enough.".into(),
         tool_schema: json!({
             "type": "object",
             "properties": {
-                "message": {"type": "string", "description": "Je bericht aan haar: kort, warm, één vraag."},
-                "phase_complete": {"type": "boolean", "description": "true als de huidige fase met dit antwoord genoeg gedekt is."}
+                "message": {"type": "string", "description": "Your message to her: short, warm, one question."},
+                "phase_complete": {"type": "boolean", "description": "true if the current phase is covered enough with this answer."}
             },
             "required": ["message", "phase_complete"]
         }),
@@ -289,7 +289,7 @@ async fn message(State(st): State<AppState>, h: HeaderMap, Json(b): Json<Say>) -
 // ---------- playback: extract, pitch, correct, approve ----------
 
 fn src() -> Value {
-    json!({"type": "array", "items": {"type": "string"}, "description": "Bronnen: \"T12\", \"D1\"."})
+    json!({"type": "array", "items": {"type": "string"}, "description": "Sources: \"T12\", \"D1\"."})
 }
 
 fn text_item() -> Value {
@@ -314,7 +314,7 @@ pub fn field_schemas() -> Map<String, Value> {
         "timeline".into(),
         json!({"type": "array", "items": {"type": "object", "properties": {
             "role": {"type": "string"}, "org": {"type": "string"},
-            "start": {"type": "string", "description": "jaar of maand-jaar zoals zij het zei"},
+            "start": {"type": "string", "description": "year or month-year, as she said it"},
             "end": {"type": "string"}, "scope": {"type": "string"}, "team_size": {"type": "string"},
             "source_ids": src()
         }, "required": ["role", "org", "source_ids"]}}),
@@ -331,7 +331,7 @@ pub fn field_schemas() -> Map<String, Value> {
     m.insert(
         "strengths".into(),
         json!({"type": "array", "items": {"type": "object", "properties": {
-            "skill": {"type": "string"}, "rank": {"type": "integer", "minimum": 1, "maximum": 5, "description": "5 = sterkst bewezen, 1 = zwak bewezen"},
+            "skill": {"type": "string"}, "rank": {"type": "integer", "minimum": 1, "maximum": 5, "description": "5 = strongest evidence, 1 = weakest evidence"},
             "evidence_ids": {"type": "array", "items": {"type": "string"}}, "source_ids": src()
         }, "required": ["skill", "rank", "evidence_ids", "source_ids"]}}),
     );
@@ -358,7 +358,7 @@ pub fn field_schemas() -> Map<String, Value> {
     m.insert("gap_framing".into(), text_item());
     m.insert(
         "voice_sample".into(),
-        json!({"type": "array", "items": text_item(), "description": "3-5 letterlijke zinnen van haar"}),
+        json!({"type": "array", "items": text_item(), "description": "3-5 sentences she said, word for word"}),
     );
     m.insert(
         "languages".into(),
@@ -439,13 +439,13 @@ async fn playback(State(st): State<AppState>, h: HeaderMap) -> ApiResult<Json<Va
     let turns = cc_db::turns(&st.pool, s.id).await?;
     let (docs, doc_ids) = confirmed_docs(&st, user.id, MAX_DOC_CHARS).await?;
     let text = format!(
-        "## Gesprek
+        "## Conversation
 {}
 
-## Documenten
+## Documents
 {}",
         transcript(&turns),
-        if docs.is_empty() { "(geen)" } else { &docs }
+        if docs.is_empty() { "(none)" } else { &docs }
     );
     // Two halves: the whole profile in one schema is past what the API compiles.
     let req = |keys: &[&str]| ToolRequest {
@@ -457,7 +457,7 @@ async fn playback(State(st): State<AppState>, h: HeaderMap) -> ApiResult<Json<Va
             text: text.clone(),
         }],
         tool_name: "save_profile".into(),
-        tool_description: "Sla het profiel op dat uit het gesprek volgt.".into(),
+        tool_description: "Save the profile that follows from the conversation.".into(),
         tool_schema: object_schema(keys),
         max_tokens: 8_000,
     };
@@ -502,10 +502,10 @@ async fn pitch(State(st): State<AppState>, h: HeaderMap) -> ApiResult<Json<Value
             system_dynamic: String::new(),
             messages: vec![Msg {
                 role: Role::User,
-                text: format!("## Gesprek\n{}\n\n## Profiel\n{facts}{note}", transcript(&turns)),
+                text: format!("## Conversation\n{}\n\n## Profile\n{facts}{note}", transcript(&turns)),
             }],
             tool_name: "write_pitch".into(),
-            tool_description: "Haar pitch en haar stemproef.".into(),
+            tool_description: "Her pitch and her voice sample.".into(),
             tool_schema: object_schema(&["pitch", "voice_sample"]),
             max_tokens: 1_500,
         };
@@ -516,7 +516,7 @@ async fn pitch(State(st): State<AppState>, h: HeaderMap) -> ApiResult<Json<Value
         if words <= profile::PITCH_MAX_WORDS {
             break;
         }
-        note = format!("\n\nLet op: je vorige pitch was {words} woorden. Blijf ruim onder de 150.");
+        note = format!("\n\nNote: your previous pitch was {words} words. Stay well under 150.");
     }
     p.pitch.text = profile::trim_to_words(&p.pitch.text, profile::PITCH_MAX_WORDS);
     let report = p.clean(&valid_ids(&turns, &doc_ids), &her_turns(&turns));
@@ -552,16 +552,16 @@ async fn correct(State(st): State<AppState>, h: HeaderMap, Json(b): Json<Correct
         .map(|x| x.1)
         .unwrap_or_default();
     let mut msg = format!(
-        "## Onderdeel: {title}\n{}\n\n## Haar correctie\n[T{seq}] Zij: {text}",
+        "## Part: {title}\n{}\n\n## Her correction\n[T{seq}] She: {text}",
         Value::Object(part)
     );
     if matches!(b.section.as_str(), "pitch" | "voice") {
         let hers: Vec<String> = turns
             .iter()
             .filter(|t| t.speaker == "seeker")
-            .map(|t| format!("[T{}] Zij: {}", t.seq, t.text))
+            .map(|t| format!("[T{}] She: {}", t.seq, t.text))
             .collect();
-        msg.push_str(&format!("\n\n## Haar beurten\n{}", hers.join("\n")));
+        msg.push_str(&format!("\n\n## Her turns\n{}", hers.join("\n")));
     }
     let req = ToolRequest {
         model: Model::Sonnet,
@@ -572,7 +572,7 @@ async fn correct(State(st): State<AppState>, h: HeaderMap, Json(b): Json<Correct
             text: msg,
         }],
         tool_name: "revise_section".into(),
-        tool_description: "Het aangepaste onderdeel.".into(),
+        tool_description: "The revised part.".into(),
         tool_schema: json!({"type": "object", "properties": {"updated": object_schema(keys)}, "required": ["updated"]}),
         max_tokens: 3_000,
     };
@@ -591,7 +591,7 @@ async fn correct(State(st): State<AppState>, h: HeaderMap, Json(b): Json<Correct
     view(&st, &user).await
 }
 
-/// "Dit ben ik": locks the draft as an approved version (spec §4).
+/// "This is me": locks the draft as an approved version (spec §4).
 async fn approve(State(st): State<AppState>, h: HeaderMap) -> ApiResult<Json<Value>> {
     let user = who(&st, &h).await?;
     let mut s = cc_db::current_session(&st.pool, user.id)
