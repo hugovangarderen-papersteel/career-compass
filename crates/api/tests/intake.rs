@@ -42,7 +42,11 @@ async fn mock_model() -> (String, Seen) {
                 s.lock().unwrap().push(b.clone());
                 // Which answer is wanted follows from the requested schema.
                 let props = &b["output_config"]["format"]["schema"]["properties"];
-                let tool = if props.get("skills_reason").is_some() {
+                let tool = if props.get("versions").is_some() {
+                    "drafts"
+                } else if props.get("next_step").is_some() {
+                    "debrief"
+                } else if props.get("skills_reason").is_some() {
                     "fit_axes"
                 } else if props.get("phase_complete").is_some() {
                     "kompas_turn"
@@ -60,6 +64,14 @@ async fn mock_model() -> (String, Seen) {
                     ""
                 };
                 let input = match tool {
+                    "drafts" => json!({"versions": [{"tone": "warm", "subject": "Your recent news", "body": "Hello,
+
+To be upfront: I used an AI assistant to look for health tech companies whose goals match my experience, and yours came out near the top. I read your recent news with interest. In my last role I helped two teams through a merger and nobody left. If my background looks interesting, a short call is the best way to find out whether there is a fit. When would suit you?"}, {"tone": "direct", "subject": "A short call?", "body": "Hello,
+
+To be upfront: I used an AI assistant to look for health tech companies whose goals match my experience, and yours came out near the top. I read your recent news with interest. In my last role I helped two teams through a merger and nobody left. If my background looks interesting, a short call is the best way to find out whether there is a fit. When would suit you?"}, {"tone": "brief", "subject": "Your recent news", "body": "Hello,
+
+To be upfront: I used an AI assistant to look for health tech companies whose goals match my experience, and yours came out near the top. I read your recent news with interest. In my last role I helped two teams through a merger and nobody left. If my background looks interesting, a short call is the best way to find out whether there is a fit. When would suit you? We already work with 200 Hospitals."}], "linkedin": "Hello, an AI search pointed me to your company (test data). I would like to connect.", "phone": "Thank you for calling back (test data)."}),
+                    "debrief" => json!({"summary": "It went well (test data).", "next_step": "Send my CV.", "suggestions": [{"kind": "contact", "name": "Test Person", "role": "Head of Care", "company": "Testco", "website": "", "note": "test data"}]}),
                     "fit_axes" => json!({"skills": 0.7, "skills_reason": "Needs a programme lead (test data).",
                         "mission": 0.6, "mission_reason": "Builds care tech (test data).",
                         "anti_pref_hit": "", "working_language": "dutch"}),
@@ -882,4 +894,159 @@ async fn matching_approve_rescore_digest(pool: PgPool) {
     let (_, d) = call(&app, "GET", &format!("/matching/companies/{top}"), &h, None).await;
     assert!(d["fit"]["excluded"].as_str().is_some(), "dismissed: {d}");
     assert_eq!(d["thumb"]["up"], false);
+}
+
+/// Phase 4 end to end, synthetic user and the mock model: locked before approval; three drafts
+/// from one sourced fact, the invented claim flagged; a flagged text is not recorded as sent;
+/// sent moves the card; 10 working days later a follow-up is due; after a second silence the
+/// item is parked. A debrief only proposes a contact until she confirms it.
+#[sqlx::test(migrations = "../db/migrations")]
+async fn outreach_draft_send_follow_up_park(pool: PgPool) {
+    let tester = cc_db::create_user(&pool, "seeker@example.org", cc_core::Role::Seeker)
+        .await
+        .unwrap();
+    cc_db::mark_test_user(&pool, tester).await.unwrap();
+    let (url, _) = mock_model().await;
+    let app = app(pool.clone(), Some(url));
+    let h = login(&app, "seeker@example.org").await;
+    let (_, v) = call(&app, "GET", "/pipeline", &h, None).await;
+    assert_eq!(v["locked"], true);
+
+    cc_db::import_seed(
+        &pool,
+        "name,website,city,stage,stage_evidence,stage_source_url,headcount_stated,philips_link,philips_source_url\n\
+         Testco,https://t.example/,Testdorp,scale-up,\"Raised a Series A\",https://news.example/t,40,no,\n",
+    )
+    .await
+    .unwrap();
+    let company: uuid::Uuid = sqlx::query_scalar("SELECT id FROM companies WHERE name = 'Testco'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO signals (id, company_id, kind, dated, detail, source_url) \
+         VALUES ($1, $2, 'news', '2026-11-01', 'Opened a new care lab (test data)', 'https://news.example/t')",
+    )
+    .bind(uuid::Uuid::new_v4())
+    .bind(company)
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    call(&app, "POST", "/intake/start", &h, None).await;
+    for a in ANSWERS {
+        call(&app, "POST", "/intake/message", &h, Some(json!({"text": a}))).await;
+    }
+    call(&app, "POST", "/intake/playback", &h, None).await;
+    call(&app, "POST", "/intake/pitch", &h, None).await;
+    let (c, v) = call(&app, "POST", "/intake/approve", &h, None).await;
+    assert_eq!(c, StatusCode::OK, "{v}");
+
+    let (c, v) = call(&app, "GET", &format!("/outreach/companies/{company}/facts"), &h, None).await;
+    assert_eq!(c, StatusCode::OK, "{v}");
+    let fact = v["facts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["text"].as_str().unwrap().contains("lab"))
+        .unwrap()["id"]
+        .clone();
+    let body =
+        json!({"company_id": company, "fact_id": fact, "contact_role": "Head of Care", "times": "Tuesday 10:00"});
+    let (c, d) = call(&app, "POST", "/outreach/drafts", &h, Some(body)).await;
+    assert_eq!(c, StatusCode::OK, "{d}");
+    let vs = d["versions"].as_array().unwrap();
+    assert_eq!(vs.len(), 3);
+    assert_eq!(vs[0]["problems"], json!([]), "{d}");
+    let flagged = vs[2]["problems"].to_string();
+    assert!(flagged.contains("200") && flagged.contains("Hospitals"), "{flagged}");
+    assert!(d["linkedin"].as_str().unwrap().chars().count() <= 300);
+    let id = d["id"].as_str().unwrap().to_string();
+    let (c, _) = call(
+        &app,
+        "POST",
+        &format!("/outreach/drafts/{id}/rank"),
+        &h,
+        Some(json!({"order": [1, 0, 2]})),
+    )
+    .await;
+    assert_eq!(c, StatusCode::OK);
+    let (_, v) = call(
+        &app,
+        "POST",
+        "/outreach/drafts",
+        &h,
+        Some(json!({"company_id": company, "fact_id": fact, "contact_role": "Head of Care"})),
+    )
+    .await;
+    assert_eq!(v["versions"].as_array().unwrap().len(), 3);
+
+    let sent_uri = format!("/outreach/drafts/{id}/sent");
+    let (_, v) = call(&app, "POST", &sent_uri, &h, Some(json!({"text": vs[2]["body"]}))).await;
+    assert_eq!(v["ok"], false, "an unsourced claim is not recorded as sent");
+    let (_, v) = call(&app, "POST", &sent_uri, &h, Some(json!({"text": vs[0]["body"]}))).await;
+    assert_eq!(v["ok"], true, "{v}");
+    let item = || async {
+        let (_, p) = call(&app, "GET", "/pipeline", &h, None).await;
+        p["items"][0].clone()
+    };
+    let it = item().await;
+    assert_eq!(
+        (it["stage"].as_str(), it["follow_up_due"].as_bool()),
+        (Some("sent"), Some(false)),
+        "{it}"
+    );
+    assert!(it["history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|e| !e["note"].as_str().unwrap().is_empty()));
+
+    let backdate = || sqlx::query("UPDATE pipeline_items SET last_sent_at = now() - interval '20 days'").execute(&pool);
+    backdate().await.unwrap();
+    assert_eq!(item().await["follow_up_due"], true);
+    let (c, f) = call(
+        &app,
+        "POST",
+        "/outreach/drafts",
+        &h,
+        Some(json!({"company_id": company, "follow_up": true})),
+    )
+    .await;
+    assert_eq!(c, StatusCode::OK, "{f}");
+    let fid = f["id"].as_str().unwrap();
+    let (_, v) = call(
+        &app,
+        "POST",
+        &format!("/outreach/drafts/{fid}/sent"),
+        &h,
+        Some(json!({"text": f["versions"][0]["body"]})),
+    )
+    .await;
+    assert_eq!(v["stage"], "follow_up", "{v}");
+    backdate().await.unwrap();
+    assert_eq!(item().await["stage"], "parked");
+
+    let pid = item().await["id"].as_str().unwrap().to_string();
+    let (_, v) = call(
+        &app,
+        "POST",
+        &format!("/pipeline/{pid}/debrief"),
+        &h,
+        Some(json!({"text": "Good talk, they said I should speak to their head of care."})),
+    )
+    .await;
+    let sid = v["suggestions"][0]["id"].as_str().unwrap().to_string();
+    let (_, c0) = call(&app, "GET", "/contacts", &h, None).await;
+    assert_eq!(c0["contacts"], json!([]), "a suggestion is never auto-added");
+    call(
+        &app,
+        "POST",
+        &format!("/suggestions/{sid}"),
+        &h,
+        Some(json!({"add": true})),
+    )
+    .await;
+    let (_, c1) = call(&app, "GET", "/contacts", &h, None).await;
+    assert_eq!(c1["contacts"].as_array().unwrap().len(), 1);
 }

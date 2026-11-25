@@ -3,6 +3,7 @@
 
 pub mod company;
 pub mod matching;
+pub mod outreach;
 pub mod profile;
 
 use rand::Rng;

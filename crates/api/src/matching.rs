@@ -24,7 +24,7 @@ pub fn routes() -> Router<AppState> {
 const LOCKED: &str = "Unlocks when you approve your profile";
 
 /// Some(user id) once a profile is approved; None means the screens stay locked.
-async fn unlocked(st: &AppState, h: &HeaderMap) -> ApiResult<Option<Uuid>> {
+pub(crate) async fn unlocked(st: &AppState, h: &HeaderMap) -> ApiResult<Option<Uuid>> {
     let user = who(st, h).await?;
     let ok: bool =
         sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM profiles WHERE user_id = $1 AND status = 'approved')")
@@ -34,7 +34,7 @@ async fn unlocked(st: &AppState, h: &HeaderMap) -> ApiResult<Option<Uuid>> {
     Ok(ok.then_some(user.id))
 }
 
-fn locked() -> Json<Value> {
+pub(crate) fn locked() -> Json<Value> {
     Json(json!({"locked": true, "message": LOCKED}))
 }
 

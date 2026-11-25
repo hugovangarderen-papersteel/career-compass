@@ -50,6 +50,7 @@ pub struct AppState {
 mod companies;
 mod intake;
 mod matching;
+mod outreach;
 
 pub fn app(state: AppState) -> Router {
     let mut r = Router::new()
@@ -65,7 +66,8 @@ pub fn app(state: AppState) -> Router {
         .route("/stark/devices/{id}/revoke", post(stark_revoke))
         .merge(intake::routes())
         .merge(companies::routes())
-        .merge(matching::routes());
+        .merge(matching::routes())
+        .merge(outreach::routes());
     if let Some(dir) = &state.web_dir {
         r = r
             .route("/app", get(|| async { axum::response::Redirect::permanent("/app/") }))
