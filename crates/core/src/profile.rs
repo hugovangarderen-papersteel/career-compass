@@ -12,16 +12,16 @@ pub const PITCH_MAX_WORDS: usize = 150;
 pub const VOICE_MIN: usize = 3;
 pub const VOICE_MAX: usize = 5;
 
-/// Dutch names of the eight intake phases (spec §3), shown as "Fase 3 van 8 · Verhalen".
+/// Names of the eight intake phases (spec §3), shown as "Phase 3 of 8 · Stories".
 pub const PHASE_NAMES: [&str; 8] = [
-    "Kennismaken",
-    "Loopbaan",
-    "Verhalen",
-    "Sterktes en energie",
-    "Wat je zoekt",
-    "Randvoorwaarden",
-    "De pauze",
-    "Terugblik",
+    "Getting to know you",
+    "Career",
+    "Stories",
+    "Strengths and energy",
+    "What you are looking for",
+    "Practicalities",
+    "The break",
+    "Looking back",
 ];
 
 pub fn phase_name(phase: u8) -> &'static str {
@@ -107,7 +107,7 @@ pub struct HomeBase {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Travel {
     pub minutes: u32,
-    /// "auto", "ov" or empty when she did not say.
+    /// How she travels ("car", "public transport"), or empty when she did not say.
     #[serde(default)]
     pub mode: Option<String>,
     #[serde(default)]
@@ -169,22 +169,22 @@ pub struct Profile {
 
 /// Playback sections (spec §3 phase 8), in reading order, with the profile keys each one holds.
 pub const SECTIONS: [(&str, &str, &[&str]); 8] = [
-    ("pitch", "Je pitch", &["pitch"]),
-    ("timeline", "Je loopbaan", &["timeline"]),
-    ("evidence", "Je verhalen", &["evidence"]),
+    ("pitch", "Your pitch", &["pitch"]),
+    ("timeline", "Your career", &["timeline"]),
+    ("evidence", "Your stories", &["evidence"]),
     (
         "strengths",
-        "Waar je sterk in bent",
+        "What you are strong at",
         &["strengths", "work_style", "anti_prefs"],
     ),
     (
         "wants",
-        "Wat je zoekt",
+        "What you are looking for",
         &["role_types", "stages", "subsectors", "mission_themes"],
     ),
     (
         "constraints",
-        "Je randvoorwaarden",
+        "Your practicalities",
         &[
             "home_base",
             "max_travel",
@@ -194,8 +194,8 @@ pub const SECTIONS: [(&str, &str, &[&str]); 8] = [
             "languages",
         ],
     ),
-    ("gap", "De pauze in één zin", &["gap_framing"]),
-    ("voice", "Zo klink jij", &["voice_sample"]),
+    ("gap", "Your break in one sentence", &["gap_framing"]),
+    ("voice", "How you sound", &["voice_sample"]),
 ];
 
 pub fn section_keys(section: &str) -> Option<&'static [&'static str]> {
@@ -241,7 +241,7 @@ pub struct CleanReport {
     pub problems: Vec<String>,
 }
 
-/// Strips JSON debris the model sometimes leaves at the end of a text (`staat."}."}`).
+/// Strips JSON debris the model sometimes leaves at the end of a text (`central."}."}`).
 /// Only a tail that holds a brace or bracket is touched, so a real closing quote stays.
 pub fn tidy(s: &str) -> String {
     let t = s.trim_end();
@@ -404,7 +404,7 @@ impl Progress {
             self.phase += 1;
         }
     }
-    /// The "N van 8" on her screen: phases covered so far.
+    /// The "N of 8" on her screen: phases covered so far.
     pub fn covered(&self) -> usize {
         self.done.len()
     }
@@ -420,17 +420,17 @@ mod tests {
 
     #[test]
     fn tidy_strips_json_debris_only() {
-        assert_eq!(tidy("centraal staat.\"}.\"}"), "centraal staat.");
-        assert_eq!(tidy("klaar\"}"), "klaar");
-        assert_eq!(tidy("Ze zei \"ja\"."), "Ze zei \"ja\".");
-        assert_eq!(tidy("Waarom niet? "), "Waarom niet?");
+        assert_eq!(tidy("is central.\"}.\"}"), "is central.");
+        assert_eq!(tidy("done\"}"), "done");
+        assert_eq!(tidy("She said \"yes\"."), "She said \"yes\".");
+        assert_eq!(tidy("Why not? "), "Why not?");
     }
 
     #[test]
     fn trims_at_sentence_end() {
-        assert_eq!(trim_to_words("Een twee drie.", 5), "Een twee drie.");
-        let long = "Ik bouw teams. Ik maak zorg beter. En dan nog veel meer woorden hier";
-        assert_eq!(trim_to_words(long, 10), "Ik bouw teams. Ik maak zorg beter.");
+        assert_eq!(trim_to_words("One two three.", 5), "One two three.");
+        let long = "I build teams. I make care better. And then many more words here too";
+        assert_eq!(trim_to_words(long, 10), "I build teams. I make care better.");
         assert_eq!(trim_to_words("a b c d e f", 3), "a b c…");
     }
 
@@ -440,22 +440,22 @@ mod tests {
 
     fn sample() -> Profile {
         serde_json::from_value(serde_json::json!({
-            "pitch": {"text": "Ik help zorgteams nieuwe technologie echt te gebruiken.", "source_ids": ["T4", "T99"]},
+            "pitch": {"text": "I help care teams really use new technology.", "source_ids": ["T4", "T99"]},
             "timeline": [
-                {"role": "Programmamanager", "org": "Voorbeeld BV", "start": "2010", "end": "2016", "source_ids": ["T4"]},
-                {"role": "Verzonnen rol", "org": "Nergens", "source_ids": ["T77"]}
+                {"role": "Programme manager", "org": "Example Ltd", "start": "2010", "end": "2016", "source_ids": ["T4"]},
+                {"role": "Made-up role", "org": "Nowhere", "source_ids": ["T77"]}
             ],
-            "evidence": [{"id": "E1", "title": "Uitrol", "situation": "s", "task": "t", "action": "a", "result": "r",
-                          "skills": ["verandermanagement"], "source_ids": ["T6"]}],
-            "strengths": [{"skill": "verandermanagement", "rank": 9, "evidence_ids": ["E1", "E7"], "source_ids": ["T6"]}],
+            "evidence": [{"id": "E1", "title": "Rollout", "situation": "s", "task": "t", "action": "a", "result": "r",
+                          "skills": ["change management"], "source_ids": ["T6"]}],
+            "strengths": [{"skill": "change management", "rank": 9, "evidence_ids": ["E1", "E7"], "source_ids": ["T6"]}],
             "role_types": [{"value": "interim", "weight": 1.4, "source_ids": ["T8"]},
                            {"value": "bogus", "weight": 1, "source_ids": ["T8"]}],
             "subsectors": [{"value": "space", "weight": 0.5, "source_ids": ["T8"]}],
             "hours_per_week": {"min": 32, "max": 24, "source_ids": ["T10"]},
-            "home_base": {"city": "Ergens", "source_ids": []},
+            "home_base": {"city": "Somewhere", "source_ids": []},
             "voice_sample": [
-                {"text": "Ik word blij van een team dat het zelf gaat doen.", "source_ids": ["T6"]},
-                {"text": "Dit heeft ze nooit gezegd.", "source_ids": ["T6"]}
+                {"text": "It makes me happy when a team starts doing it themselves.", "source_ids": ["T6"]},
+                {"text": "She never said this.", "source_ids": ["T6"]}
             ]
         }))
         .unwrap()
@@ -464,7 +464,7 @@ mod tests {
     #[test]
     fn clean_drops_unsourced_and_invented() {
         let mut p = sample();
-        let her = vec!["Nou, ik word   blij van een team dat het zelf gaat doen! Echt.".to_string()];
+        let her = vec!["Well, it makes me   happy when a team starts doing it themselves! Really.".to_string()];
         let r = p.clean(&ids(&["T4", "T6", "T8", "T10"]), &her);
         assert_eq!(p.timeline.len(), 1, "item with only an unknown source is dropped");
         assert_eq!(p.pitch.source_ids, vec!["T4"]);
@@ -485,7 +485,7 @@ mod tests {
     fn pitch_word_limit() {
         let mut p = Profile {
             pitch: Text {
-                text: "woord ".repeat(151),
+                text: "word ".repeat(151),
                 source_ids: vec!["T1".into()],
             },
             ..Default::default()
@@ -511,7 +511,7 @@ mod tests {
         assert_eq!(g.phase, 8);
         assert_eq!(g.covered(), 7);
         assert!(g.ready_for_playback());
-        assert_eq!(phase_name(3), "Verhalen");
+        assert_eq!(phase_name(3), "Stories");
     }
 
     #[test]

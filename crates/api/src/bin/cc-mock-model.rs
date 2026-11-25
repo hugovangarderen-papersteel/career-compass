@@ -9,14 +9,14 @@ use axum::{http::StatusCode, routing::post, Json, Router};
 use serde_json::{json, Value};
 
 const QUESTIONS: [&str; 8] = [
-    "(testmodel) Welkom! Hoe wil je dat ik je noem, en waar woon je ongeveer?",
-    "(testmodel) Vertel eens over je laatste baan: wat deed je daar op een gewone dag?",
-    "(testmodel) Wat is een moment waar je trots op bent? Wat gebeurde er, en wat deed jij?",
-    "(testmodel) Waar krijg je energie van in je werk, en waarvan juist niet?",
-    "(testmodel) Wat voor rol en wat voor organisatie zoek je nu?",
-    "(testmodel) Hoeveel uur per week wil je werken, en hoe ver wil je reizen?",
-    "(testmodel) Is er iets in je loopbaan dat je graag goed wilt uitleggen, zoals een pauze?",
-    "(testmodel) Dank je. Wil je nog iets aanvullen voordat ik je profiel maak?",
+    "(test model) Welcome! What would you like me to call you, and roughly where do you live?",
+    "(test model) Tell me about your last job: what did you do there on an ordinary day?",
+    "(test model) What is a moment you are proud of? What happened, and what did you do?",
+    "(test model) What gives you energy in your work, and what takes it away?",
+    "(test model) What kind of role and what kind of organisation are you looking for now?",
+    "(test model) How many hours a week would you like to work, and how far are you willing to travel?",
+    "(test model) Is there anything in your career you would like to explain well, such as a break?",
+    "(test model) Thank you. Is there anything you would like to add before I make your profile?",
 ];
 
 static TURN: AtomicUsize = AtomicUsize::new(0);
@@ -29,35 +29,35 @@ fn answer(b: &Value) -> Option<Value> {
         json!({"message": QUESTIONS[i], "phase_complete": true})
     } else if props.get("timeline").is_some() {
         json!({
-            "timeline": [{"role": "Programmamanager (testdata)", "org": "Verzonnen zorggroep", "start": "2015",
-                "end": "2024", "scope": "team van 12", "source_ids": ["T2"]}],
-            "evidence": [{"id": "E1", "title": "Fusie (testdata)", "situation": "Twee teams moesten samen.",
-                "task": "Het team bij elkaar houden.", "action": "Ze liet beide kanten elkaar uitleggen.",
-                "result": "Niemand vertrok.", "metric": "0 van 12 vertrokken", "skills": ["verbinden"],
+            "timeline": [{"role": "Programme manager (test data)", "org": "Made-up care group", "start": "2015",
+                "end": "2024", "scope": "team of 12", "source_ids": ["T2"]}],
+            "evidence": [{"id": "E1", "title": "Merger (test data)", "situation": "Two teams had to merge.",
+                "task": "Keep the team together.", "action": "She had both sides explain themselves to each other.",
+                "result": "Nobody left.", "metric": "0 of 12 left", "skills": ["connecting people"],
                 "source_ids": ["T4"]}],
-            "strengths": [{"skill": "Mensen verbinden (testdata)", "rank": 5, "evidence_ids": ["E1"], "source_ids": ["T4"]}],
-            "languages": [{"language": "Nederlands", "level": "moedertaal", "source_ids": ["T2"]}],
-            "anti_prefs": [], "work_style": [{"text": "Rustig overleg, dan doorpakken (testdata).", "source_ids": ["T6"]}]
+            "strengths": [{"skill": "Connecting people (test data)", "rank": 5, "evidence_ids": ["E1"], "source_ids": ["T4"]}],
+            "languages": [{"language": "Dutch", "level": "native", "source_ids": ["T2"]}],
+            "anti_prefs": [], "work_style": [{"text": "Calm discussion, then decisive action (test data).", "source_ids": ["T6"]}]
         })
     } else if props.get("home_base").is_some() {
         json!({
             "role_types": [{"value": "interim", "weight": 0.8, "source_ids": ["T8"]}],
             "stages": [{"value": "scaleup", "weight": 0.7, "source_ids": ["T8"]}],
             "mission_themes": [], "work_mode": null, "start_date": null,
-            "max_travel": {"minutes": 45, "mode": "auto", "source_ids": ["T10"]},
+            "max_travel": {"minutes": 45, "mode": "car", "source_ids": ["T10"]},
             "hours_per_week": {"min": 24, "max": 32, "source_ids": ["T10"]},
             "subsectors": [{"value": "care_tech", "weight": 0.9, "source_ids": ["T8"]}],
-            "home_base": {"city": "Utrecht (testdata)", "source_ids": ["T2"]},
-            "gap_framing": {"text": "Een jaar zorg voor familie (testdata).", "source_ids": ["T12"]}
+            "home_base": {"city": "Utrecht (test data)", "source_ids": ["T2"]},
+            "gap_framing": {"text": "A year caring for family (test data).", "source_ids": ["T12"]}
         })
     } else if props.get("voice_sample").is_some() {
         json!({
-            "pitch": {"text": "(testdata) Ik verbind mensen die elkaar eerst niet verstaan, en bouw zo zorg die werkt.",
+            "pitch": {"text": "(test data) I connect people who at first do not understand each other, and that is how I build care that works.",
                 "source_ids": ["T4", "T6"]},
-            "voice_sample": [{"text": "(testdata) Ik laat beide kanten eerst uitpraten.", "source_ids": ["T4"]}]
+            "voice_sample": [{"text": "(test data) I let both sides finish talking first.", "source_ids": ["T4"]}]
         })
     } else if props.get("updated").is_some() {
-        json!({"updated": {"gap_framing": {"text": "(testdata) Aangepast zoals gevraagd.", "source_ids": ["T2"]}}})
+        json!({"updated": {"gap_framing": {"text": "(test data) Changed as asked.", "source_ids": ["T2"]}}})
     } else {
         return None;
     })

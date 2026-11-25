@@ -1,4 +1,4 @@
-//! Career Compass window: pairing, login, the menu and "Praat met Kompas" (Phase 1).
+//! Career Compass window: pairing, login, the menu and "Talk to Kompas" (Phase 1).
 //! All network and key work happens behind `invoke`: the Tauri side on the Mac, `shim.js` in
 //! the web build. This file never talks to the server itself.
 
@@ -23,7 +23,7 @@ async fn call<A: Serialize>(cmd: &str, args: &A) -> Result<Value, String> {
         .map_err(|e| e.to_string())?;
     match invoke(cmd, a).await {
         Ok(v) => serde_wasm_bindgen::from_value(v).map_err(|e| e.to_string()),
-        Err(e) => Err(e.as_string().unwrap_or_else(|| "onbekende fout".into())),
+        Err(e) => Err(e.as_string().unwrap_or_else(|| "unknown error".into())),
     }
 }
 
@@ -60,40 +60,40 @@ enum Screen {
 }
 
 const MENU: [&str; 9] = [
-    "Deze week",
-    "Praat met Kompas",
-    "Bedrijven",
-    "Kaart",
-    "Verhalen & media",
-    "Outreach-studio",
-    "Pijplijn",
-    "Mijn ranglijst",
-    "Instellingen",
+    "This week",
+    "Talk to Kompas",
+    "Companies",
+    "Map",
+    "Stories & media",
+    "Outreach studio",
+    "Pipeline",
+    "My ranking",
+    "Settings",
 ];
 
 /// Turns a server or app error into a sentence she can act on.
 fn nl(e: &str) -> String {
     match e {
-        "unauthorized" => "Dat klopt niet. Controleer je e-mailadres en wachtwoord.".into(),
-        "password_too_short" => "Kies een wachtwoord van minstens 8 tekens.".into(),
-        "password_already_set" => "Er is al een wachtwoord. Log gewoon in.".into(),
-        "denied" => "De koppeling is niet goedgekeurd. Vraag Hugo even waarom.".into(),
-        "expired" => "De code is verlopen (na 15 minuten). Vraag een nieuwe code aan.".into(),
-        "revoked" => "Dit apparaat is ontkoppeld. Koppel het opnieuw.".into(),
-        "too_many_pending" => "Er wachten al te veel koppelverzoeken. Probeer het later nog eens.".into(),
-        "offline" => "Geen verbinding met Career Compass. Staat het internet aan?".into(),
-        "insecure" => "Deze pagina moet via een beveiligde verbinding (https) open.".into(),
-        "kompas_offline" | "cap_reached" => "Kompas pauzeert even. Je antwoord is bewaard.".into(),
-        "profile_failed" => "Je profiel lukte niet in één keer. Probeer het nog eens.".into(),
-        "not_ready_for_playback" => "Het gesprek is nog niet klaar voor je profiel.".into(),
+        "unauthorized" => "That didn't work. Please check your email address and password.".into(),
+        "password_too_short" => "Please choose a password of at least 8 characters.".into(),
+        "password_already_set" => "You already have a password. Just log in.".into(),
+        "denied" => "This device wasn't approved. Please ask Hugo why.".into(),
+        "expired" => "The code has expired (it lasts 15 minutes). Please ask for a new code.".into(),
+        "revoked" => "This device has been disconnected. Please connect it again.".into(),
+        "too_many_pending" => "Too many connection requests are waiting. Please try again later.".into(),
+        "offline" => "Can't reach Career Compass. Is the internet on?".into(),
+        "insecure" => "This page has to be opened over a secure connection (https).".into(),
+        "kompas_offline" | "cap_reached" => "Kompas is taking a short break. Your answer has been saved.".into(),
+        "profile_failed" => "Your profile didn't come together in one go. Please try again.".into(),
+        "not_ready_for_playback" => "The conversation isn't ready for your profile yet.".into(),
         "no_active_intake" | "not_in_playback" | "no_draft" => {
-            "Dit scherm was niet meer actueel. Kijk nog eens.".into()
+            "This screen was out of date. Please have another look.".into()
         }
-        "unknown_section" => "Dat deel van je profiel ken ik niet.".into(),
-        "too_long" => "Dat is te lang. Maak het wat korter.".into(),
-        "empty" => "Er staat nog niets in.".into(),
-        "forbidden" | "not_allowed" => "Dat kan hier niet.".into(),
-        other => format!("Er ging iets mis ({other})."),
+        "unknown_section" => "I don't recognise that part of your profile.".into(),
+        "too_long" => "That's too long. Please make it a little shorter.".into(),
+        "empty" => "There's nothing in it yet.".into(),
+        "forbidden" | "not_allowed" => "That isn't possible here.".into(),
+        other => format!("Something went wrong ({other})."),
     }
 }
 
@@ -125,14 +125,14 @@ fn App() -> impl IntoView {
     });
 
     move || match screen.get() {
-        Screen::Loading => view! { <div class="center"><p>"Even geduld..."</p></div> }.into_any(),
+        Screen::Loading => view! { <div class="center"><p>"One moment..."</p></div> }.into_any(),
         Screen::Unpaired(err) => view! { <Pair err=err set_screen=set_screen/> }.into_any(),
         Screen::Waiting(code) => view! {
             <div class="center"><div class="card">
-                <h1>"Wachten op goedkeuring"</h1>
-                <p>"Hugo krijgt nu een bericht. Zie je deze code ook bij hem? Dan klopt het."</p>
+                <h1>"Waiting for approval"</h1>
+                <p>"Hugo is getting a message now. Does he see this same code? Then all is well."</p>
                 <div class="code">{code}</div>
-                <p>"Dit scherm gaat vanzelf verder zodra hij akkoord geeft."</p>
+                <p>"This screen moves on by itself as soon as he says yes."</p>
             </div></div>
         }
         .into_any(),
@@ -171,9 +171,9 @@ fn Pair(err: Option<String>, set_screen: WriteSignal<Screen>) -> impl IntoView {
     };
     view! {
         <div class="center"><div class="card">
-            <h1>"Welkom bij Career Compass"</h1>
-            <p>"Dit apparaat moet eerst één keer gekoppeld worden. Hugo keurt dat goed op zijn telefoon."</p>
-            <button on:click=start disabled=busy>"Koppel dit apparaat"</button>
+            <h1>"Welcome to Career Compass"</h1>
+            <p>"First, this device needs to be connected, just once. Hugo approves it on his phone."</p>
+            <button on:click=start disabled=busy>"Connect this device"</button>
             {move || error.get().map(|e| view! { <p class="error">{e}</p> })}
         </div></div>
     }
@@ -206,14 +206,14 @@ fn Login(set_screen: WriteSignal<Screen>) -> impl IntoView {
     };
     view! {
         <div class="center"><div class="card">
-            <h1>{move || if first.get() { "Kies je wachtwoord" } else { "Inloggen" }}</h1>
-            <label>"E-mailadres"</label>
+            <h1>{move || if first.get() { "Choose your password" } else { "Log in" }}</h1>
+            <label>"Email address"</label>
             <input type="email" bind:value=email/>
-            <label>{move || if first.get() { "Nieuw wachtwoord (minstens 8 tekens)" } else { "Wachtwoord" }}</label>
+            <label>{move || if first.get() { "New password (at least 8 characters)" } else { "Password" }}</label>
             <input type="password" bind:value=password/>
-            <button on:click=submit>{move || if first.get() { "Opslaan en verder" } else { "Inloggen" }}</button>
+            <button on:click=submit>{move || if first.get() { "Save and continue" } else { "Log in" }}</button>
             <button class="link" on:click=move |_| set_first.update(|f| *f = !*f)>
-                {move || if first.get() { "Ik heb al een wachtwoord" } else { "Eerste keer hier? Kies een wachtwoord" }}
+                {move || if first.get() { "I already have a password" } else { "First time here? Choose a password" }}
             </button>
             {move || error.get().map(|e| view! { <p class="error">{e}</p> })}
         </div></div>
@@ -241,7 +241,7 @@ fn Home(set_screen: WriteSignal<Screen>) -> impl IntoView {
                 } else {
                     view! {
                         <h1>{MENU[page.get()]}</h1>
-                        <p>"Dit onderdeel komt in een volgende versie. De app werkt zichzelf bij zodra het klaar is."</p>
+                        <p>"This part is coming in a later version. The app will update itself as soon as it's ready."</p>
                     }
                     .into_any()
                 }}
@@ -309,7 +309,7 @@ impl Ctx {
     }
 }
 
-const THINKING: &str = "Kompas denkt na…";
+const THINKING: &str = "Kompas is thinking…";
 
 #[component]
 fn Kompas(set_screen: WriteSignal<Screen>) -> impl IntoView {
@@ -334,7 +334,7 @@ fn Kompas(set_screen: WriteSignal<Screen>) -> impl IntoView {
     move || {
         let v = ctx.data.get();
         if v.is_null() {
-            return view! { <p>"Even geduld..."</p> }.into_any();
+            return view! { <p>"One moment..."</p> }.into_any();
         }
         let body = match v["status"].as_str().unwrap_or("none") {
             "none" => view! { <Intro ctx=ctx/> }.into_any(),
@@ -364,8 +364,8 @@ fn Phases(v: Value) -> impl IntoView {
     let name = v["phase_name"].as_str().unwrap_or("").to_string();
     view! {
         <header class="phases">
-            <h1>"Praat met Kompas"</h1>
-            <p>{format!("Fase {phase} van {total} · {name}")}</p>
+            <h1>"Talk to Kompas"</h1>
+            <p>{format!("Step {phase} of {total} · {name}")}</p>
             <div class="dots">
                 {(1..=total)
                     .map(|i| {
@@ -382,12 +382,12 @@ fn Phases(v: Value) -> impl IntoView {
 fn Intro(ctx: Ctx) -> impl IntoView {
     view! {
         <div class="card intro">
-            <p>"Kompas stelt je steeds één korte vraag: over je werk, je verhalen en wat je zoekt. Er zijn geen goede of foute antwoorden."</p>
-            <p>"Na elk antwoord wordt alles bewaard. Je kunt stoppen wanneer je wilt en later verdergaan waar je was."</p>
+            <p>"Kompas asks you one short question at a time: about your work, your stories and what you are looking for. There are no right or wrong answers."</p>
+            <p>"Everything is saved after each answer. You can stop whenever you like and carry on later where you left off."</p>
             <button
                 on:click=move |_| ctx.go(vec![("/intake/start", None)], THINKING)
                 disabled=move || ctx.busy.get().is_some()
-            >"Begin het gesprek"</button>
+            >"Start the conversation"</button>
         </div>
     }
 }
@@ -437,68 +437,68 @@ fn Chat(ctx: Ctx, v: Value) -> impl IntoView {
         </div>
         {move || ctx.retry.get().then(|| view! {
             <button class="secondary" on:click=move |_| ctx.go(vec![("/intake/message", Some(json!({ "text": "" })))], THINKING)>
-                "Probeer opnieuw"
+                "Try again"
             </button>
         })}
         {ready.then(|| view! {
             <div class="card ready">
-                <p>"Kompas heeft genoeg om je profiel te maken. Je kunt ook eerst nog iets aanvullen."</p>
+                <p>"Kompas has enough to make your profile. You can also add something first."</p>
                 <button on:click=move |_| ctx.go(
                     vec![("/intake/playback", None), ("/intake/pitch", None)],
-                    "Kompas maakt je profiel. Dat duurt ongeveer een minuut…",
-                )>"Maak mijn profiel"</button>
+                    "Kompas is making your profile. This takes about a minute…",
+                )>"Make my profile"</button>
             </div>
         })}
         <div class="composer">
             <textarea
                 rows="3"
-                placeholder="Typ je antwoord…"
+                placeholder="Type your answer…"
                 prop:value=move || input.get()
                 on:input=move |ev| input.set(event_target_value(&ev))
             ></textarea>
             <div class="row">
-                <button class="secondary" disabled=true title="Spreken komt later">"🎤 Spreken komt later"</button>
-                <button on:click=send disabled=move || ctx.busy.get().is_some()>"Verstuur"</button>
+                <button class="secondary" disabled=true title="Speaking is coming later">"🎤 Speaking is coming later"</button>
+                <button on:click=send disabled=move || ctx.busy.get().is_some()>"Send"</button>
             </div>
         </div>
     }
 }
 
-/// Dutch label of a profile field inside a section card.
+/// Label of a profile field inside a section card.
 fn field_label(key: &str) -> &'static str {
     match key {
-        "work_style" => "Zo werk je graag",
-        "anti_prefs" => "Liever niet",
-        "strengths" => "Sterke punten",
-        "role_types" => "Soort rol",
-        "stages" => "Soort organisatie",
+        "work_style" => "How you like to work",
+        "anti_prefs" => "Rather not",
+        "strengths" => "Strengths",
+        "role_types" => "Type of role",
+        "stages" => "Type of organisation",
         "subsectors" => "Sector",
-        "mission_themes" => "Waar je warm voor loopt",
-        "home_base" => "Woonplaats",
-        "max_travel" => "Reistijd",
-        "hours_per_week" => "Uren per week",
-        "work_mode" => "Werkvorm",
-        "start_date" => "Beschikbaar vanaf",
-        "languages" => "Talen",
+        "mission_themes" => "What you care about",
+        "home_base" => "Where you live",
+        "max_travel" => "Travel time",
+        "hours_per_week" => "Hours per week",
+        "work_mode" => "Way of working",
+        "start_date" => "Available from",
+        "languages" => "Languages",
         _ => "",
     }
 }
 
 fn code_nl(c: &str) -> String {
     match c {
-        "permanent" => "Vaste baan",
+        "permanent" => "Permanent job",
         "interim" => "Interim",
-        "part_time" => "Parttime",
-        "advisory" => "Advies of toezicht",
+        "part_time" => "Part-time",
+        "advisory" => "Advisory or board role",
         "startup" => "Start-up",
         "scaleup" => "Scale-up",
-        "midsize" => "Middelgroot bedrijf",
-        "corporate" => "Groot bedrijf",
-        "medtech" => "Medische technologie",
-        "digital_health" => "Digitale zorg",
-        "care_tech" => "Zorgtechnologie",
-        "diagnostics" => "Diagnostiek",
-        "other" => "Anders",
+        "midsize" => "Medium-sized company",
+        "corporate" => "Large company",
+        "medtech" => "Medical technology",
+        "digital_health" => "Digital health",
+        "care_tech" => "Care technology",
+        "diagnostics" => "Diagnostics",
+        "other" => "Other",
         other => other,
     }
     .to_string()
@@ -541,9 +541,9 @@ fn line(key: &str, it: &Value) -> String {
         "max_travel" => {
             let mode = s(&it["mode"]);
             let mode = if mode.is_empty() { mode } else { format!(", {mode}") };
-            format!("Hooguit {} minuten{mode}", it["minutes"])
+            format!("At most {} minutes{mode}", it["minutes"])
         }
-        "hours_per_week" => format!("{} tot {} uur", it["min"], it["max"]),
+        "hours_per_week" => format!("{} to {} hours", it["min"], it["max"]),
         "languages" => format!("{} ({})", s(&it["language"]), s(&it["level"])),
         _ => s(&it["text"]),
     }
@@ -565,13 +565,13 @@ fn quote(id: &str, turns: &Value, docs: &Value) -> String {
     };
     if let Some(n) = id.strip_prefix('T') {
         if let Some(t) = find(turns, "seq", n.to_string()) {
-            let who = if t["speaker"] == "seeker" { "Jij" } else { "Kompas" };
+            let who = if t["speaker"] == "seeker" { "You" } else { "Kompas" };
             return format!("{who}: “{}”", s(&t["text"]));
         }
     } else if let Some(d) = find(docs, "label", id.to_string()) {
-        return format!("Uit je document “{}”", s(&d["name"]));
+        return format!("From your document “{}”", s(&d["name"]));
     }
-    "Deze bron is niet meer te vinden.".into()
+    "This source can no longer be found.".into()
 }
 
 #[component]
@@ -583,13 +583,13 @@ fn Playback(ctx: Ctx, v: Value) -> impl IntoView {
     let turns = v["turns"].clone();
     view! {
         {if approved {
-            view! { <div class="card done"><p>"Je profiel is vastgelegd. Dit ben jij, in je eigen woorden."</p></div> }.into_any()
+            view! { <div class="card done"><p>"Your profile is saved. This is you, in your own words."</p></div> }.into_any()
         } else {
-            view! { <p class="lead">"Lees elk deel rustig door. Klopt iets niet, schrijf dan in je eigen woorden hoe het wel zit. Jouw woorden gaan altijd voor."</p> }.into_any()
+            view! { <p class="lead">"Take your time reading each part. If something is not right, write in your own words how it really is. Your words always come first."</p> }.into_any()
         }}
         {(no_pitch && !approved).then(|| view! {
-            <button class="secondary" on:click=move |_| ctx.go(vec![("/intake/pitch", None)], "Kompas schrijft je pitch…")>
-                "Schrijf mijn pitch"
+            <button class="secondary" on:click=move |_| ctx.go(vec![("/intake/pitch", None)], "Kompas is writing your pitch…")>
+                "Write my pitch"
             </button>
         })}
         {sections
@@ -597,8 +597,8 @@ fn Playback(ctx: Ctx, v: Value) -> impl IntoView {
             .map(|sec| view! { <Section ctx=ctx sec=sec data=data.clone() turns=turns.clone() approved=approved/> })
             .collect_view()}
         {(!approved).then(|| view! {
-            <button class="approve" on:click=move |_| ctx.go(vec![("/intake/approve", None)], "Even vastleggen…")>
-                "Dit ben ik"
+            <button class="approve" on:click=move |_| ctx.go(vec![("/intake/approve", None)], "Saving…")>
+                "This is me"
             </button>
         })}
     }
@@ -641,7 +641,7 @@ fn Section(ctx: Ctx, sec: Value, data: Value, turns: Value, approved: bool) -> i
                                     view! {
                                         <button class="chip" on:click=move |_| {
                                             shown.set(Some(quote(&id, &turns, &ctx.docs.get_untracked())))
-                                        }>{format!("bron {}", i + 1)}</button>
+                                        }>{format!("source {}", i + 1)}</button>
                                     }
                                 })
                                 .collect_view()}
@@ -651,7 +651,7 @@ fn Section(ctx: Ctx, sec: Value, data: Value, turns: Value, approved: bool) -> i
                 .collect_view();
             view! {
                 {(!label.is_empty()).then(|| view! { <h3>{label}</h3> })}
-                {rows.is_empty().then(|| view! { <p class="empty">"Nog niets."</p> })}
+                {rows.is_empty().then(|| view! { <p class="empty">"Nothing yet."</p> })}
                 <ul class=list>{lines}</ul>
             }
         })
@@ -660,7 +660,7 @@ fn Section(ctx: Ctx, sec: Value, data: Value, turns: Value, approved: bool) -> i
     view! {
         <section class="card section">
             <h2>{s(&sec["title"])}</h2>
-            {(key == "pitch" && words > 0).then(|| view! { <p class="meta">{format!("{words} woorden")}</p> })}
+            {(key == "pitch" && words > 0).then(|| view! { <p class="meta">{format!("{words} words")}</p> })}
             {body}
             {move || shown.get().map(|q| view! { <blockquote on:click=move |_| shown.set(None)>{q}</blockquote> })}
             {(!approved).then(move || view! {
@@ -669,21 +669,21 @@ fn Section(ctx: Ctx, sec: Value, data: Value, turns: Value, approved: bool) -> i
                     view! {
                         <textarea
                             rows="3"
-                            placeholder="Hoe zit het wel?"
+                            placeholder="What should it say?"
                             prop:value=move || fix.get()
                             on:input=move |ev| fix.set(event_target_value(&ev))
                         ></textarea>
                         <div class="row">
-                            <button class="secondary" on:click=move |_| editing.set(false)>"Laat maar"</button>
+                            <button class="secondary" on:click=move |_| editing.set(false)>"Never mind"</button>
                             <button on:click=move |_| ctx.go(
                                 vec![("/intake/correct", Some(json!({ "section": k.clone(), "text": fix.get() })))],
-                                "Kompas past dit deel aan…",
-                            )>"Pas aan"</button>
+                                "Kompas is updating this part…",
+                            )>"Update it"</button>
                         </div>
                     }
                     .into_any()
                 } else {
-                    view! { <button class="link" on:click=move |_| editing.set(true)>"Dit klopt niet helemaal"</button> }.into_any()
+                    view! { <button class="link" on:click=move |_| editing.set(true)>"This is not quite right"</button> }.into_any()
                 }}
             })}
         </section>
@@ -705,15 +705,15 @@ fn Documents(ctx: Ctx) -> impl IntoView {
     };
     view! {
         <details class="card docs" prop:open=move || open.get() on:toggle=move |_| open.update(|o| *o = !*o)>
-            <summary>"Een document toevoegen (cv, LinkedIn-tekst)"</summary>
-            <p class="meta">"Kompas gebruikt een document pas als jij het bevestigt. Wat jij zelf zegt, gaat altijd voor."</p>
+            <summary>"Add a document (CV, LinkedIn text)"</summary>
+            <p class="meta">"Kompas only uses a document once you confirm it. What you say yourself always comes first."</p>
             {move || ctx.docs.get().as_array().cloned().unwrap_or_default().into_iter().map(|d| {
                 let id = s(&d["id"]);
                 let pending = d["status"] == "pending";
                 let state = match s(&d["status"]).as_str() {
-                    "confirmed" => "gebruikt",
-                    "rejected" => "niet gebruikt",
-                    _ => "wacht op jou",
+                    "confirmed" => "used",
+                    "rejected" => "not used",
+                    _ => "waiting for you",
                 };
                 let (a, b) = (id.clone(), id);
                 view! {
@@ -721,18 +721,18 @@ fn Documents(ctx: Ctx) -> impl IntoView {
                         <strong>{s(&d["name"])}</strong>" · "{state}
                         {pending.then(|| view! {
                             <div class="row">
-                                <button class="secondary" on:click=move |_| ctx.docs_call(format!("/intake/documents/{b}"), json!({ "confirm": false }))>"Nee"</button>
-                                <button on:click=move |_| ctx.docs_call(format!("/intake/documents/{a}"), json!({ "confirm": true }))>"Ja, gebruik dit"</button>
+                                <button class="secondary" on:click=move |_| ctx.docs_call(format!("/intake/documents/{b}"), json!({ "confirm": false }))>"No"</button>
+                                <button on:click=move |_| ctx.docs_call(format!("/intake/documents/{a}"), json!({ "confirm": true }))>"Yes, use this"</button>
                             </div>
                         })}
                     </div>
                 }
             }).collect_view()}
-            <label>"Naam"</label>
+            <label>"Name"</label>
             <input prop:value=move || name.get() on:input=move |ev| name.set(event_target_value(&ev))/>
-            <label>"Tekst (plakken)"</label>
+            <label>"Text (paste it here)"</label>
             <textarea rows="5" prop:value=move || body.get() on:input=move |ev| body.set(event_target_value(&ev))></textarea>
-            <button on:click=add>"Toevoegen"</button>
+            <button on:click=add>"Add"</button>
         </details>
     }
 }
@@ -747,13 +747,13 @@ fn Reset(ctx: Ctx) -> impl IntoView {
                 view! {
                     <button class="danger" on:click=move |_| {
                         sure.set(false);
-                        ctx.go(vec![("/intake/reset", None)], "Opnieuw beginnen…");
-                    }>"Zeker weten: alles wissen"</button>
-                    <button class="link" on:click=move |_| sure.set(false)>"Toch niet"</button>
+                        ctx.go(vec![("/intake/reset", None)], "Starting again…");
+                    }>"Are you sure? Delete everything"</button>
+                    <button class="link" on:click=move |_| sure.set(false)>"No, keep it"</button>
                 }
                 .into_any()
             } else {
-                view! { <button class="link" on:click=move |_| sure.set(true)>"Testaccount: opnieuw beginnen"</button> }.into_any()
+                view! { <button class="link" on:click=move |_| sure.set(true)>"Test account: start again"</button> }.into_any()
             }}
         </div>
     }

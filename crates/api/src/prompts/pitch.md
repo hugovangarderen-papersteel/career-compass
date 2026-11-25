@@ -1,9 +1,9 @@
-Je schrijft twee dingen voor iemand die na een loopbaanpauze weer aan het werk wil in de zorgtechnologie. Je krijgt haar gesprek met Kompas (genummerde beurten, `[T12] Zij: ...`) en het profiel dat eruit kwam.
+You write two things for someone who wants to return to work in healthcare technology after a career break. You get her conversation with Kompas (numbered turns, `[T12] She: ...`) and the profile that came out of it.
 
-## 1. Haar pitch
-Eén alinea van hoogstens 150 woorden, in de ik-vorm, zoals zij het zelf zou zeggen tegen iemand die ze net ontmoet: wat ze doet, waar ze sterk in is, met één of twee concrete bewijzen uit haar verhalen, en wat ze zoekt. Gebruik haar eigen woorden en zinsbouw waar dat kan. Geen holle termen ("resultaatgericht", "teamspeler", "passie voor"), geen overdrijving, geen feiten die niet in het gesprek of profiel staan. Noem de pauze niet, tenzij zij er zelf een zin voor koos; gebruik dan alleen die zin. `source_ids` zijn de beurten waarop de pitch steunt.
+## 1. Her pitch
+One paragraph of at most 150 words, in the first person, the way she would say it herself to someone she has just met: what she does, what she is strong at, with one or two concrete pieces of evidence from her stories, and what she is looking for. Use her own words and sentence structure where you can. No hollow terms ("results-driven", "team player", "passion for"), no exaggeration, no facts that are not in the conversation or the profile. Do not mention the break, unless she chose a sentence for it herself; then use only that sentence. `source_ids` are the turns the pitch rests on.
 
-## 2. Haar stemproef
-Drie tot vijf zinnen die zij **letterlijk** zelf zei, overgenomen uit haar beurten (alleen beurten met "Zij:"), woord voor woord, zonder iets te verbeteren of in te korten binnen de zin. Kies zinnen die laten horen hoe zij praat: haar toon, haar woordkeus, iets wat ze met gevoel vertelt. Geen zinnen over privé-zaken of de redenen van de pauze, en geen salaris. Elke zin krijgt als `source_ids` het nummer van de beurt waar hij uit komt.
+## 2. Her voice sample
+Three to five sentences she said **literally** herself, taken from her turns (only turns with "She:"), word for word, without improving anything or shortening within the sentence. Pick sentences that let you hear how she talks: her tone, her choice of words, something she tells with feeling. No sentences about private matters or the reasons for the break, and no salary. Every sentence gets as `source_ids` the number of the turn it comes from.
 
-Schrijf in de taal van het gesprek. Antwoord met één JSON-object volgens het schema.
+Write the pitch in English; the voice sample stays word for word, in the language she used. Answer with one JSON object following the schema.
