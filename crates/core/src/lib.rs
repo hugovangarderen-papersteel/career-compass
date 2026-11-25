@@ -161,6 +161,35 @@ pub fn may_spend(spent_eur: f64, estimate_eur: f64, cap_eur: f64, lane: Lane) ->
     cap_eur > 0.0 && spent_eur + estimate_eur <= limit
 }
 
+/// One fact Kompas read in a document: what it says and the exact words it rests on.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct DocFact {
+    pub kind: String,
+    pub text: String,
+    pub snippet: String,
+}
+
+/// Honesty by code, not by prompt: keeps a fact only when its snippet occurs verbatim in the
+/// document text (whitespace folded, since PDF text breaks lines freely). Returns the kept facts
+/// and how many were dropped.
+pub fn guard_facts(text: &str, facts: Vec<DocFact>) -> (Vec<DocFact>, usize) {
+    let hay = fold_ws(text);
+    let (mut kept, mut dropped) = (Vec::new(), 0);
+    for f in facts {
+        let needle = fold_ws(&f.snippet);
+        if !needle.is_empty() && !f.text.trim().is_empty() && hay.contains(&needle) {
+            kept.push(f);
+        } else {
+            dropped += 1;
+        }
+    }
+    (kept, dropped)
+}
+
+fn fold_ws(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,5 +228,30 @@ mod tests {
             assert_eq!(DeviceStatus::parse(s).unwrap().as_str(), s);
         }
         assert!(DeviceStatus::parse("x").is_none());
+    }
+
+    #[test]
+    fn guard_drops_a_fact_whose_quote_is_not_in_the_text() {
+        let text = "Curriculum vitae
+Projectleider bij Voorbeeld BV,
+2015-2020.";
+        let f = |t: &str, q: &str| DocFact {
+            kind: "role".into(),
+            text: t.into(),
+            snippet: q.into(),
+        };
+        let facts = vec![
+            // A Dutch CV: the quote stays in its language, the fact is in English.
+            f(
+                "Project lead at Voorbeeld BV, 2015-2020",
+                "Projectleider bij Voorbeeld BV, 2015-2020.",
+            ),
+            f("Director at Nowhere Ltd", "Director at Nowhere Ltd"),
+            f("Empty quote", "   "),
+        ];
+        let (kept, dropped) = guard_facts(text, facts);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].text, "Project lead at Voorbeeld BV, 2015-2020");
+        assert_eq!(dropped, 2);
     }
 }

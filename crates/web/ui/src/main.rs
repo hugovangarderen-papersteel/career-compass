@@ -16,6 +16,57 @@ extern "C" {
     fn scroll_to(x: f64, y: f64);
 }
 
+// The microphone and file picker, in plain browser JS (no web-sys): each hands back
+// `{mime|name, data}` with the bytes as base64, because the bridge to the server carries JSON only.
+#[wasm_bindgen(inline_js = r#"
+let rec = null, chunks = [];
+async function b64(blob) {
+  const b = new Uint8Array(await blob.arrayBuffer());
+  let s = "";
+  for (let i = 0; i < b.length; i += 32768) s += String.fromCharCode(...b.subarray(i, i + 32768));
+  return btoa(s);
+}
+export async function mic_start() {
+  const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  chunks = [];
+  rec = new MediaRecorder(stream);
+  rec.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+  rec.start();
+}
+export function mic_stop() {
+  return new Promise((ok, no) => {
+    const r = rec;
+    rec = null;
+    if (!r) return no("bad_audio");
+    r.onstop = async () => {
+      r.stream.getTracks().forEach((t) => t.stop());
+      ok({ mime: r.mimeType, data: await b64(new Blob(chunks, { type: r.mimeType })) });
+    };
+    r.stop();
+  });
+}
+export async function read_file(ev) {
+  const input = ev.target, f = input.files && input.files[0];
+  input.value = "";
+  return f ? { name: f.name, data: await b64(f) } : null;
+}
+"#)]
+extern "C" {
+    #[wasm_bindgen(catch)]
+    async fn mic_start() -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch)]
+    async fn mic_stop() -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch)]
+    async fn read_file(ev: JsValue) -> Result<JsValue, JsValue>;
+}
+
+/// A JS helper's answer as JSON; `None` when it failed or gave nothing.
+fn js_json(r: Result<JsValue, JsValue>) -> Option<Value> {
+    r.ok()
+        .and_then(|v| serde_wasm_bindgen::from_value::<Value>(v).ok())
+        .filter(|v| !v.is_null())
+}
+
 async fn call<A: Serialize>(cmd: &str, args: &A) -> Result<Value, String> {
     // json_compatible: objects go over as plain JS objects, not Maps.
     let a = args
@@ -92,6 +143,14 @@ fn nl(e: &str) -> String {
         "unknown_section" => "I don't recognise that part of your profile.".into(),
         "too_long" => "That's too long. Please make it a little shorter.".into(),
         "empty" => "There's nothing in it yet.".into(),
+        "no_password_yet" => "Welcome! Please choose your password first.".into(),
+        "stt_offline" => "Speaking doesn't work right now. Please type your answer instead.".into(),
+        "no_mic" => "Career Compass may not use the microphone. You can allow it in System Settings, under Privacy & Security, Microphone.".into(),
+        "bad_audio" => "That recording didn't come through. Please try again.".into(),
+        "no_speech" => "I didn't hear any words. Please try again, a little closer to the microphone.".into(),
+        "unsupported_file" => "I can read PDF, Word (.docx) and text files. Please choose one of those.".into(),
+        "unreadable_file" => "I couldn't open that file. Is it perhaps damaged or protected?".into(),
+        "no_text" => "I couldn't find any text in that file. Is it perhaps a scan? Then please paste the text instead.".into(),
         "forbidden" | "not_allowed" => "That isn't possible here.".into(),
         other => format!("Something went wrong ({other})."),
     }
@@ -200,6 +259,10 @@ fn Login(set_screen: WriteSignal<Screen>) -> impl IntoView {
             match call(cmd, &args).await {
                 Ok(_) => set_screen.set(Screen::Home),
                 Err(e) if e == "revoked" => set_screen.set(Screen::Unpaired(Some(nl(&e)))),
+                Err(e) if e == "no_password_yet" => {
+                    set_first.set(true);
+                    set_error.set(Some(nl(&e)));
+                }
                 Err(e) => set_error.set(Some(nl(&e))),
             }
         });
@@ -298,13 +361,15 @@ impl Ctx {
     }
 
     /// Document calls answer with her document list.
-    fn docs_call(self, path: String, body: Value) {
+    fn docs_call(self, path: String, body: Value, busy: Option<&'static str>) {
         self.error.set(None);
+        self.busy.set(busy);
         spawn_local(async move {
             match api("POST", &path, Some(body)).await {
                 Ok(v) => self.docs.set(v),
                 Err(e) => self.fail(&e).await,
             }
+            self.busy.set(None);
         });
     }
 }
@@ -424,6 +489,41 @@ fn Chat(ctx: Ctx, v: Value) -> impl IntoView {
             scroll_to(0.0, 1e7);
         });
     };
+    // Push to talk: press to record, press again to stop; the text lands in her box to check.
+    let rec = RwSignal::new(false);
+    let talk = move |_| {
+        ctx.error.set(None);
+        if !rec.get() {
+            spawn_local(async move {
+                match mic_start().await {
+                    Ok(_) => rec.set(true),
+                    Err(_) => ctx.error.set(Some(nl("no_mic"))),
+                }
+            });
+            return;
+        }
+        rec.set(false);
+        ctx.busy.set(Some("Turning your words into text…"));
+        spawn_local(async move {
+            let said = match js_json(mic_stop().await) {
+                None => Err("bad_audio".to_string()),
+                Some(clip) => api("POST", "/intake/audio", Some(clip)).await.map(|v| s(&v["text"])),
+            };
+            match said {
+                Ok(t) if t.is_empty() => ctx.error.set(Some(nl("no_speech"))),
+                Ok(t) => input.update(|i| {
+                    if !i.trim().is_empty() {
+                        i.push(' ');
+                    }
+                    i.push_str(&t);
+                }),
+                // Not `fail`: that reloads the page and would wipe what she typed.
+                Err(e) if e == "unauthorized" || e == "revoked" => ctx.fail(&e).await,
+                Err(e) => ctx.error.set(Some(nl(&e))),
+            }
+            ctx.busy.set(None);
+        });
+    };
     request_animation_frame(|| scroll_to(0.0, 1e7));
     view! {
         <div class="chat">
@@ -457,8 +557,10 @@ fn Chat(ctx: Ctx, v: Value) -> impl IntoView {
                 on:input=move |ev| input.set(event_target_value(&ev))
             ></textarea>
             <div class="row">
-                <button class="secondary" disabled=true title="Speaking is coming later">"🎤 Speaking is coming later"</button>
-                <button on:click=send disabled=move || ctx.busy.get().is_some()>"Send"</button>
+                <button class="secondary" on:click=talk disabled=move || ctx.busy.get().is_some()>
+                    {move || if rec.get() { "⏹ Stop, I'm done talking" } else { "🎤 Speak your answer" }}
+                </button>
+                <button on:click=send disabled=move || ctx.busy.get().is_some() || rec.get()>"Send"</button>
             </div>
         </div>
     }
@@ -692,6 +794,7 @@ fn Section(ctx: Ctx, sec: Value, data: Value, turns: Value, approved: bool) -> i
 
 #[component]
 fn Documents(ctx: Ctx) -> impl IntoView {
+    const READING: &str = "Kompas is reading your document…";
     let open = RwSignal::new(false);
     let name = RwSignal::new(String::new());
     let body = RwSignal::new(String::new());
@@ -699,41 +802,98 @@ fn Documents(ctx: Ctx) -> impl IntoView {
         ctx.docs_call(
             "/intake/documents".into(),
             json!({ "name": name.get(), "body": body.get() }),
+            Some(READING),
         );
         name.set(String::new());
         body.set(String::new());
     };
+    let upload = move |ev: leptos::ev::Event| {
+        let ev: JsValue = ev.into();
+        spawn_local(async move {
+            match js_json(read_file(ev).await) {
+                Some(file) => ctx.docs_call("/intake/documents".into(), file, Some(READING)),
+                None => ctx.error.set(Some(nl("unreadable_file"))),
+            }
+        });
+    };
     view! {
         <details class="card docs" prop:open=move || open.get() on:toggle=move |_| open.update(|o| *o = !*o)>
             <summary>"Add a document (CV, LinkedIn text)"</summary>
-            <p class="meta">"Kompas only uses a document once you confirm it. What you say yourself always comes first."</p>
+            <p class="meta">"Kompas reads the facts from your document and asks you about each one. Only the facts you confirm are used, and Kompas won't ask you about them again. What you say yourself always comes first."</p>
             {move || ctx.docs.get().as_array().cloned().unwrap_or_default().into_iter().map(|d| {
-                let id = s(&d["id"]);
-                let pending = d["status"] == "pending";
-                let state = match s(&d["status"]).as_str() {
-                    "confirmed" => "used",
-                    "rejected" => "not used",
-                    _ => "waiting for you",
+                let facts = d["facts"].as_array().cloned().unwrap_or_default();
+                let waiting = facts.iter().filter(|f| f["status"] == "pending").count();
+                let dropped = d["dropped"].as_i64().unwrap_or(0);
+                // Documents from before the fact check have no facts: used whole or not at all.
+                let state = match (facts.len(), s(&d["status"]).as_str()) {
+                    (0, "confirmed") => "used".to_string(),
+                    (0, _) => "not used".to_string(),
+                    (n, _) if waiting > 0 => format!("{n} facts, {waiting} waiting for you"),
+                    (n, _) => format!("{n} facts, all checked"),
                 };
-                let (a, b) = (id.clone(), id);
                 view! {
                     <div class="doc">
                         <strong>{s(&d["name"])}</strong>" · "{state}
-                        {pending.then(|| view! {
-                            <div class="row">
-                                <button class="secondary" on:click=move |_| ctx.docs_call(format!("/intake/documents/{b}"), json!({ "confirm": false }))>"No"</button>
-                                <button on:click=move |_| ctx.docs_call(format!("/intake/documents/{a}"), json!({ "confirm": true }))>"Yes, use this"</button>
-                            </div>
+                        {(dropped > 0).then(|| view! {
+                            <p class="meta">{format!("{dropped} more left out: Kompas couldn't find them word for word in the document.")}</p>
                         })}
+                        {facts.into_iter().map(|f| view! { <Fact ctx=ctx f=f/> }).collect_view()}
                     </div>
                 }
             }).collect_view()}
-            <label>"Name"</label>
+            <label>"Upload a file (PDF, Word or text)"</label>
+            <input type="file" accept=".pdf,.docx,.txt" on:change=upload disabled=move || ctx.busy.get().is_some()/>
+            <label>"Or paste the text here, with a name"</label>
             <input prop:value=move || name.get() on:input=move |ev| name.set(event_target_value(&ev))/>
-            <label>"Text (paste it here)"</label>
             <textarea rows="5" prop:value=move || body.get() on:input=move |ev| body.set(event_target_value(&ev))></textarea>
-            <button on:click=add>"Add"</button>
+            <button on:click=add disabled=move || ctx.busy.get().is_some()>"Add"</button>
         </details>
+    }
+}
+
+/// One fact read from her document, with the quote it came from; pending ones ask her.
+#[component]
+fn Fact(ctx: Ctx, f: Value) -> impl IntoView {
+    let path = format!("/intake/facts/{}", s(&f["id"]));
+    let status = s(&f["status"]);
+    let editing = RwSignal::new(false);
+    let fix = RwSignal::new(s(&f["text"]));
+    let decide = move |body: Value| ctx.docs_call(path.clone(), body, None);
+    view! {
+        <div class="fact">
+            <p>{s(&f["text"])}{match status.as_str() {
+                "confirmed" => " ✓",
+                "rejected" => " (not used)",
+                _ => "",
+            }}</p>
+            <blockquote>{s(&f["snippet"])}</blockquote>
+            {(status == "pending").then(move || {
+                let decide = decide.clone();
+                move || {
+                    let decide = decide.clone();
+                    if editing.get() {
+                        view! {
+                            <textarea rows="2" prop:value=move || fix.get() on:input=move |ev| fix.set(event_target_value(&ev))></textarea>
+                            <div class="row">
+                                <button class="secondary" on:click=move |_| editing.set(false)>"Never mind"</button>
+                                <button on:click=move |_| decide(json!({ "confirm": true, "text": fix.get() }))>"Save my version"</button>
+                            </div>
+                        }
+                        .into_any()
+                    } else {
+                        let (yes, no) = (decide.clone(), decide);
+                        view! {
+                            <div class="row">
+                                <button on:click=move |_| yes(json!({ "confirm": true }))>"Yes, that's right"</button>
+                                <button class="secondary" on:click=move |_| editing.set(true)>"Correct it"</button>
+                                <button class="secondary" on:click=move |_| no(json!({ "confirm": false }))>"Not right"</button>
+                            </div>
+                        }
+                        .into_any()
+                    }
+                }
+            })}
+        </div>
     }
 }
 

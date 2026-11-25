@@ -22,6 +22,8 @@ fn app(pool: PgPool) -> Router {
         eur_per_usd: 1.0,
         web_dir: None,
         test_only: false,
+        stt_url: None,
+        stt_model: "test".into(),
     })
 }
 
@@ -147,6 +149,12 @@ async fn full_pairing_and_login(pool: PgPool) {
 
     let dt = ("x-device-token", token.as_str());
     let creds = json!({ "email": "seeker@example.org", "password": "correct horse" });
+    // No password yet: the app is told so, and switches her to "Choose your password".
+    let (c, v) = call(&app, "POST", "/auth/login", &[dt], Some(creds.clone())).await;
+    assert_eq!(
+        (c, v["error"].as_str()),
+        (StatusCode::CONFLICT, Some("no_password_yet"))
+    );
     assert_eq!(
         call(&app, "POST", "/auth/set-password", &[], Some(creds.clone()))
             .await

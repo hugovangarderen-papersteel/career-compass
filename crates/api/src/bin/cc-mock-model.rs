@@ -58,6 +58,16 @@ fn answer(b: &Value) -> Option<Value> {
         })
     } else if props.get("updated").is_some() {
         json!({"updated": {"gap_framing": {"text": "(test data) Changed as asked.", "source_ids": ["T2"]}}})
+    } else if props.get("facts").is_some() {
+        // The quote has to be in the document, so the first line of its text is the one fact.
+        let msg = b["messages"][0]["content"][0]["text"].as_str().unwrap_or_default();
+        let line = msg
+            .split_once("\n\n")
+            .map_or("", |x| x.1)
+            .lines()
+            .find(|l| !l.trim().is_empty());
+        json!({"facts": line.map_or(vec![], |l| vec![json!({"kind": "other",
+            "text": "(test data) The document's first line.", "snippet": l.trim()})])})
     } else {
         return None;
     })

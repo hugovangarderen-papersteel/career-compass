@@ -52,6 +52,8 @@ async fn mock_model() -> (String, Seen) {
                     "write_pitch"
                 } else if props.get("updated").is_some() {
                     "revise_section"
+                } else if props.get("facts").is_some() {
+                    "save_document_facts"
                 } else {
                     ""
                 };
@@ -86,6 +88,11 @@ async fn mock_model() -> (String, Seen) {
                     "revise_section" => json!({"updated": {
                         "gap_framing": {"text": "A year of family caregiving, chosen deliberately.", "source_ids": ["T18"]}
                     }}),
+                    // The second quote is not in the document: the snippet guard drops it.
+                    "save_document_facts" => json!({"facts": [
+                        {"kind": "role", "text": "Programme manager from 2014 to 2024.", "snippet": "Programme manager, 2014-2024."},
+                        {"kind": "achievement", "text": "Won a national award.", "snippet": "National award winner 2019"}
+                    ]}),
                     _ => return (StatusCode::BAD_REQUEST, Json(json!({"error": {"type": "unknown_tool"}}))),
                 };
                 (
@@ -115,6 +122,8 @@ fn app(pool: PgPool, llm: Option<String>) -> Router {
         eur_per_usd: 1.0,
         web_dir: None,
         test_only: false,
+        stt_url: None,
+        stt_model: "test".into(),
     })
 }
 
@@ -371,7 +380,8 @@ async fn real_account_guards(pool: PgPool) {
     let (_, v) = call(&online, "GET", "/intake", &her, None).await;
     assert!(v["turns"].as_array().unwrap().iter().all(|x| x["text"] != ANSWERS[0]));
 
-    // Document stub: pending until she confirms, her word decides.
+    // Documents: the model lists the facts, the guard drops a fact whose quote is not in the
+    // text, and nothing counts until she confirms it. Her word decides, and only hers.
     let (c, d) = call(
         &online,
         "POST",
@@ -384,27 +394,72 @@ async fn real_account_guards(pool: PgPool) {
     let (_, list) = call(&online, "GET", "/intake/documents", &t, None).await;
     assert!(list.as_array().unwrap().is_empty(), "not visible to another account");
     let (_, list) = call(&online, "GET", "/intake/documents", &her, None).await;
-    assert_eq!(list[0]["status"], "pending");
-    let id = list[0]["id"].as_str().unwrap();
+    assert_eq!(list[0]["dropped"], 1, "{list}");
+    let facts = list[0]["facts"].as_array().unwrap();
+    assert_eq!(facts.len(), 1);
+    assert_eq!(facts[0]["status"], "pending");
+    assert!(list[0].get("body").is_none());
+    let id = facts[0]["id"].as_str().unwrap();
+    let (_, v) = call(&online, "GET", "/intake", &her, None).await;
+    assert_eq!(v["pending_facts"], 1);
     let (c, _) = call(
         &online,
         "POST",
-        &format!("/intake/documents/{id}"),
+        &format!("/intake/facts/{id}"),
         &t,
         Some(json!({"confirm": true})),
     )
     .await;
-    assert_eq!(c, StatusCode::NOT_FOUND, "the tester cannot confirm her document");
-    call(
+    assert_eq!(c, StatusCode::NOT_FOUND, "the tester cannot confirm her fact");
+    let (_, list) = call(
         &online,
         "POST",
-        &format!("/intake/documents/{id}"),
+        &format!("/intake/facts/{id}"),
         &her,
-        Some(json!({"confirm": true})),
+        Some(json!({"confirm": true, "text": "Programme manager at a hospital group, 2014 to 2024."})),
     )
     .await;
-    let (_, list) = call(&online, "GET", "/intake/documents", &her, None).await;
-    assert_eq!(list[0]["status"], "confirmed");
+    assert_eq!(list[0]["facts"][0]["status"], "confirmed");
+    assert_eq!(
+        list[0]["facts"][0]["text"],
+        "Programme manager at a hospital group, 2014 to 2024."
+    );
+    // Kompas now sees what she confirmed, in her own words.
+    let (c, v) = call(&online, "POST", "/intake/start", &her, None).await;
+    assert_eq!(c, StatusCode::OK, "{v}");
+    let last = seen.lock().unwrap().last().unwrap().to_string();
+    assert!(last.contains("(facts she confirmed):\\n- Programme manager at a hospital group, 2014 to 2024."));
+    let (c, v) = call(
+        &online,
+        "POST",
+        "/intake/documents",
+        &her,
+        Some(json!({"name": "x.bin", "data": STANDARD.encode([0xffu8, 0xfe, 0x00])})),
+    )
+    .await;
+    assert_eq!(
+        (c, v["error"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("unsupported_file"))
+    );
+    let docs_calls: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM llm_calls WHERE purpose = 'documents'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(docs_calls, 1, "metered under its own purpose");
+
+    // Push-to-talk without a speech-to-text service: a clear 503, nothing else.
+    let (c, v) = call(
+        &online,
+        "POST",
+        "/intake/audio",
+        &her,
+        Some(json!({"mime": "audio/webm", "data": STANDARD.encode(b"not really audio")})),
+    )
+    .await;
+    assert_eq!(
+        (c, v["error"].as_str()),
+        (StatusCode::SERVICE_UNAVAILABLE, Some("stt_offline"))
+    );
 }
 
 /// Made-up seeker for the live run. A cheap model plays her from this sheet, so she answers
@@ -479,6 +534,8 @@ async fn live_dummy(pool: PgPool) {
         eur_per_usd: 1.0,
         web_dir: None,
         test_only: false,
+        stt_url: None,
+        stt_model: "test".into(),
     };
     let app = cc_api::app(st);
     let h = login(&app, "dummy@example.org").await;
@@ -551,6 +608,8 @@ async fn mock_model_answers_test_accounts_only(pool: PgPool) {
         eur_per_usd: 1.0,
         web_dir: None,
         test_only: true,
+        stt_url: None,
+        stt_model: "test".into(),
     });
 
     let real = login(&app, "real@example.org").await;
