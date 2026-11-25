@@ -55,6 +55,15 @@ async fn main() -> anyhow::Result<()> {
         .filter(|v| !v.is_empty());
     let stt_model = std::env::var("CC_STT_MODEL").unwrap_or_else(|_| "Systran/faster-whisper-small".into());
 
+    // The enrichment lane: a task in this process, real model only (the mock answers intake only).
+    if let (Some(llm), false) = (&llm, mock_model) {
+        tokio::spawn(cc_worker::run(cc_worker::Worker {
+            pool: pool.clone(),
+            llm: llm.clone(),
+            eur_per_usd,
+            fetch: cc_enrich::Fetcher::new(std::time::Duration::from_secs(5)),
+        }));
+    }
     let app = cc_api::app(cc_api::AppState {
         pool,
         jwt_secret: jwt_secret.into_bytes(),

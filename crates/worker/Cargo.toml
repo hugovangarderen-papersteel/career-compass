@@ -6,3 +6,14 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+cc-core.workspace = true
+cc-db.workspace = true
+cc-llm.workspace = true
+cc-enrich = { path = "../enrich" }
+serde_json.workspace = true
+chrono.workspace = true
+uuid.workspace = true
+sqlx.workspace = true
+sha2.workspace = true
+tracing.workspace = true
+tokio = { workspace = true, features = ["time"] }

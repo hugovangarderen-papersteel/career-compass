@@ -1,4 +1,5 @@
-//! `cc-admin`: one-off admin tasks on the server host (create her account, set the cap).
+//! `cc-admin`: one-off admin tasks on the server host (create her account, set the cap,
+//! load the company seed).
 //! Run on the host only; reads DATABASE_URL from the environment.
 
 use anyhow::Context;
@@ -28,6 +29,8 @@ enum Cmd {
     },
     /// Set the monthly cap in EUR.
     SetCap { eur: f64 },
+    /// Load the researched company seed CSV (kept off the repo) and queue each new company.
+    ImportSeed { csv: std::path::PathBuf },
 }
 
 #[tokio::main]
@@ -49,6 +52,11 @@ async fn main() -> anyhow::Result<()> {
             anyhow::ensure!(eur.is_finite() && eur >= 0.0, "cap must be a non-negative number");
             cc_db::set_cap_eur(&pool, eur).await?;
             println!("cap set to EUR {eur:.2}");
+        }
+        Cmd::ImportSeed { csv } => {
+            let text = std::fs::read_to_string(&csv).with_context(|| format!("read {}", csv.display()))?;
+            let (added, known, skipped) = cc_db::import_seed(&pool, &text).await?;
+            println!("seed: {added} added, {known} already known, {skipped} skipped (no name or site)");
         }
     }
     Ok(())

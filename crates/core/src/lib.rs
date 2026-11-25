@@ -1,6 +1,7 @@
 //! Career Compass domain types shared by the api, the worker and the desktop app.
 //! Numbers here come from the build spec v2 (§2b pairing, §10b cost cap).
 
+pub mod company;
 pub mod profile;
 
 use rand::Rng;
@@ -173,17 +174,21 @@ pub struct DocFact {
 /// document text (whitespace folded, since PDF text breaks lines freely). Returns the kept facts
 /// and how many were dropped.
 pub fn guard_facts(text: &str, facts: Vec<DocFact>) -> (Vec<DocFact>, usize) {
-    let hay = fold_ws(text);
     let (mut kept, mut dropped) = (Vec::new(), 0);
     for f in facts {
-        let needle = fold_ws(&f.snippet);
-        if !needle.is_empty() && !f.text.trim().is_empty() && hay.contains(&needle) {
+        if !f.text.trim().is_empty() && quote_in(text, &f.snippet) {
             kept.push(f);
         } else {
             dropped += 1;
         }
     }
     (kept, dropped)
+}
+
+/// Does `snippet` occur verbatim in `text` (whitespace folded)? An empty snippet never does.
+pub fn quote_in(text: &str, snippet: &str) -> bool {
+    let needle = fold_ws(snippet);
+    !needle.is_empty() && fold_ws(text).contains(&needle)
 }
 
 fn fold_ws(s: &str) -> String {

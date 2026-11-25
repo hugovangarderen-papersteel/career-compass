@@ -151,6 +151,7 @@ fn nl(e: &str) -> String {
         "unsupported_file" => "I can read PDF, Word (.docx) and text files. Please choose one of those.".into(),
         "unreadable_file" => "I couldn't open that file. Is it perhaps damaged or protected?".into(),
         "no_text" => "I couldn't find any text in that file. Is it perhaps a scan? Then please paste the text instead.".into(),
+        "bad_url" => "That doesn't look like a website address. Please paste the company's site, e.g. https://example.com.".into(),
         "forbidden" | "not_allowed" => "That isn't possible here.".into(),
         other => format!("Something went wrong ({other})."),
     }
@@ -301,6 +302,8 @@ fn Home(set_screen: WriteSignal<Screen>) -> impl IntoView {
             <main>
                 {move || if page.get() == 1 {
                     view! { <Kompas set_screen=set_screen/> }.into_any()
+                } else if page.get() == 2 {
+                    view! { <Companies set_screen=set_screen/> }.into_any()
                 } else {
                     view! {
                         <h1>{MENU[page.get()]}</h1>
@@ -563,6 +566,164 @@ fn Chat(ctx: Ctx, v: Value) -> impl IntoView {
                 <button on:click=send disabled=move || ctx.busy.get().is_some() || rec.get()>"Send"</button>
             </div>
         </div>
+    }
+}
+
+/// Status of a company's background lookup, in words.
+fn status_label(s: &str) -> &'static str {
+    match s {
+        "new" | "queued" => "Waiting",
+        "running" => "Reading now",
+        "enriched" => "Done",
+        "retrying" => "Trying again later",
+        "paused_cap" => "Paused (monthly budget reached)",
+        "failed" => "Could not be read",
+        _ => "",
+    }
+}
+
+/// A source link; only web addresses become links.
+fn source(url: &Value) -> impl IntoView {
+    let u = s(url);
+    u.starts_with("http")
+        .then(|| view! { <a href=u target="_blank" rel="noopener noreferrer">" (source)"</a> })
+}
+
+/// Add a company by its website; the admin also sees the list, one company's facts,
+/// timeline and signals, and can have it read again.
+#[component]
+fn Companies(set_screen: WriteSignal<Screen>) -> impl IntoView {
+    let url = RwSignal::new(String::new());
+    let note = RwSignal::new(None::<String>);
+    let list = RwSignal::new(Value::Null);
+    let detail = RwSignal::new(Value::Null);
+    // Only the admin gets the list; for anyone else it stays empty.
+    let load = move || {
+        spawn_local(async move {
+            if let Ok(v) = api("GET", "/admin/companies", None).await {
+                list.set(v);
+            }
+        })
+    };
+    load();
+    let fail = move |e: String| match e.as_str() {
+        "unauthorized" => set_screen.set(Screen::Login),
+        "revoked" => set_screen.set(Screen::Unpaired(Some(nl(&e)))),
+        _ => note.set(Some(nl(&e))),
+    };
+    let add = move |_| {
+        let u = url.get();
+        spawn_local(async move {
+            match api("POST", "/companies", Some(json!({ "url": u }))).await {
+                Ok(v) => {
+                    url.set(String::new());
+                    note.set(Some(if v["new"] == true {
+                        format!(
+                            "Added {}. Its public pages are read in the background.",
+                            s(&v["website"])
+                        )
+                    } else {
+                        format!("{} is already in the list.", s(&v["website"]))
+                    }));
+                    load();
+                }
+                Err(e) => fail(e),
+            }
+        });
+    };
+    let open = move |id: String| {
+        spawn_local(async move {
+            match api("GET", &format!("/admin/companies/{id}"), None).await {
+                Ok(v) => detail.set(v),
+                Err(e) => fail(e),
+            }
+        })
+    };
+    let again = move |id: String| {
+        spawn_local(async move {
+            match api("POST", &format!("/admin/companies/{id}/enrich"), None).await {
+                Ok(_) => {
+                    note.set(Some("Queued: it will be read again shortly.".into()));
+                    load();
+                }
+                Err(e) => fail(e),
+            }
+        })
+    };
+    view! {
+        <h1>"Companies"</h1>
+        <div class="card">
+            <p>"Know a company that could fit? Paste its website and it is looked up for you."</p>
+            <div class="row">
+                <input type="url" placeholder="https://example.com" bind:value=url/>
+                <button on:click=add>"Add"</button>
+            </div>
+            {move || note.get().map(|n| view! { <p class="meta">{n}</p> })}
+        </div>
+        {move || {
+            let v = list.get();
+            let cs = v["companies"].as_array()?.clone();
+            let spend = format!(
+                "Spent on reading company pages: €{:.2} in the last 7 days, €{:.2} in the last 30 days.",
+                v["spend_7d_eur"].as_f64().unwrap_or(0.0),
+                v["spend_30d_eur"].as_f64().unwrap_or(0.0)
+            );
+            Some(view! {
+                <div class="card">
+                    <p class="meta">{spend}</p>
+                    {cs.into_iter().map(|c| {
+                        let id = s(&c["id"]);
+                        let line = format!(
+                            "{} · {} · {} facts, {} signals",
+                            s(&c["city"]),
+                            status_label(&s(&c["status"])),
+                            c["facts"],
+                            c["signals"]
+                        );
+                        view! {
+                            <div class="row">
+                                <button class="link" on:click=move |_| open(id.clone())>{s(&c["name"])}</button>
+                                <span class="meta">{line}</span>
+                            </div>
+                        }
+                    }).collect_view()}
+                </div>
+            })
+        }}
+        {move || {
+            let d = detail.get();
+            let c = d["company"].clone();
+            let id = s(&c["id"]);
+            (!id.is_empty()).then(|| view! {
+                <div class="card">
+                    <h2>{s(&c["name"])}</h2>
+                    <p><a href=s(&c["website"]) target="_blank" rel="noopener noreferrer">{s(&c["website"])}</a></p>
+                    <p class="meta">{format!("{} · {}", status_label(&s(&c["status"])), s(&c["last_error"]))}</p>
+                    <p>{s(&c["mission_summary"])}</p>
+                    <h3>"Facts"</h3>
+                    {items(&d["facts"]).into_iter().map(|f| view! {
+                        <p class="fact">{format!("{}: {}", s(&f["field"]), s(&f["value"]))}{source(&f["source_url"])}</p>
+                    }).collect_view()}
+                    <h3>"Timeline"</h3>
+                    {items(&d["events"]).into_iter().map(|e| view! {
+                        <p class="fact">{format!("{} · {}", s(&e["date"]), s(&e["title"]))}{source(&e["source_url"])}</p>
+                    }).collect_view()}
+                    <h3>"Signals"</h3>
+                    {items(&d["signals"]).into_iter().map(|g| view! {
+                        <p class="fact">
+                            {format!("{} · {} · strength {:.2} · {}", s(&g["dated"]), s(&g["kind"]),
+                                g["strength"].as_f64().unwrap_or(0.0), s(&g["detail"]))}
+                            {source(&g["source_url"])}
+                        </p>
+                    }).collect_view()}
+                    <h3>"People"</h3>
+                    {items(&d["people"]).into_iter().map(|p| view! {
+                        <p class="fact">{format!("{}, {}", s(&p["name"]), s(&p["role"]))}{source(&p["source_url"])}</p>
+                    }).collect_view()}
+                    <button class="secondary" on:click=move |_| again(id.clone())>"Read its pages again"</button>
+                </div>
+            })
+        }}
     }
 }
 
