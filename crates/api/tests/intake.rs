@@ -42,7 +42,9 @@ async fn mock_model() -> (String, Seen) {
                 s.lock().unwrap().push(b.clone());
                 // Which answer is wanted follows from the requested schema.
                 let props = &b["output_config"]["format"]["schema"]["properties"];
-                let tool = if props.get("phase_complete").is_some() {
+                let tool = if props.get("skills_reason").is_some() {
+                    "fit_axes"
+                } else if props.get("phase_complete").is_some() {
                     "kompas_turn"
                 } else if props.get("timeline").is_some() {
                     "save_stories"
@@ -58,6 +60,9 @@ async fn mock_model() -> (String, Seen) {
                     ""
                 };
                 let input = match tool {
+                    "fit_axes" => json!({"skills": 0.7, "skills_reason": "Needs a programme lead (test data).",
+                        "mission": 0.6, "mission_reason": "Builds care tech (test data).",
+                        "anti_pref_hit": "", "working_language": "dutch"}),
                     "kompas_turn" => json!({"message": "Tell me, what happened then?", "phase_complete": true}),
                     "save_stories" => json!({
                         "timeline": [{"role": "programme manager", "org": "hospital group", "source_ids": ["T4"]}],
@@ -709,4 +714,172 @@ async fn company_base_seed_add_admin(pool: PgPool) {
         .await
         .unwrap();
     assert_eq!(jobs, 2);
+}
+
+/// Phase 3 end to end: locked before approval; approve -> config -> rescore (mock model, mock
+/// OSRM, a made-up home coordinate) -> a digest of 5 sourced companies; a thumb-down re-ranks
+/// from the axis cache without a new model call.
+#[sqlx::test(migrations = "../db/migrations")]
+async fn matching_approve_rescore_digest(pool: PgPool) {
+    let tester = cc_db::create_user(&pool, "seeker@example.org", cc_core::Role::Seeker)
+        .await
+        .unwrap();
+    cc_db::mark_test_user(&pool, tester).await.unwrap();
+    let (url, _) = mock_model().await;
+    let app = app(pool.clone(), Some(url.clone()));
+    let h = login(&app, "seeker@example.org").await;
+
+    let (c, v) = call(&app, "GET", "/matching", &h, None).await;
+    assert_eq!(c, StatusCode::OK);
+    assert_eq!(v["locked"], true);
+    assert_eq!(v["message"], "Unlocks when you approve your profile");
+    assert!(v.get("ranked").is_none(), "no data before approval");
+
+    // Seven companies, made up; G is far from the made-up home base.
+    let mut seed = String::from(
+        "name,website,city,stage,stage_evidence,stage_source_url,headcount_stated,philips_link,philips_source_url\n",
+    );
+    for n in ["A", "B", "C", "D", "E", "F", "G"] {
+        seed += &format!(
+            "Testco {n},https://{n}.example/,Testdorp,scale-up,\"Raised a Series A\",https://news.example/{n},40,no,\n"
+        );
+    }
+    cc_db::import_seed(&pool, &seed).await.unwrap();
+    let dated = (chrono::Utc::now().date_naive() - chrono::Duration::days(10)).to_string();
+    for (n, sub, lon) in [
+        ("A", "care_tech", 4.1),
+        ("B", "care_tech", 4.2),
+        ("C", "care_tech", 4.3),
+        ("D", "medtech", 4.4),
+        ("E", "medtech", 4.5),
+        ("F", "digital_health", 4.6),
+        ("G", "care_tech", 9.99999),
+    ] {
+        let id: uuid::Uuid = sqlx::query_scalar(
+            "UPDATE companies SET subsector = $2, lat = 50.5, lon = $3 WHERE name = $1 RETURNING id",
+        )
+        .bind(format!("Testco {n}"))
+        .bind(sub)
+        .bind(lon)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO signals (id, company_id, kind, dated, detail, source_url) \
+             VALUES ($1, $2, 'funding', $3, 'Series A (test data)', $4)",
+        )
+        .bind(uuid::Uuid::new_v4())
+        .bind(id)
+        .bind(&dated)
+        .bind(format!("https://news.example/{n}"))
+        .execute(&pool)
+        .await
+        .unwrap();
+    }
+
+    // A stand-in OSRM table: 20 min, except 300 min for G.
+    let osrm = Router::new().route(
+        "/table/v1/driving/{coords}",
+        axum::routing::get(|axum::extract::Path(coords): axum::extract::Path<String>| async move {
+            let row: Vec<Value> = coords
+                .split(';')
+                .enumerate()
+                .map(|(i, c)| match (i, c.starts_with("9.99999")) {
+                    (0, _) => json!(0.0),
+                    (_, true) => json!(18000.0),
+                    _ => json!(1200.0),
+                })
+                .collect();
+            Json(json!({"code": "Ok", "durations": [row]}))
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let osrm_url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, osrm).await.unwrap() });
+    let w = cc_worker::Worker {
+        pool: pool.clone(),
+        llm: cc_llm::Client::new(&url, "test-key"),
+        eur_per_usd: 1.0,
+        fetch: cc_enrich::Fetcher::new(std::time::Duration::from_millis(0)),
+        home: Some((50.0, 4.0)),
+        osrm_url,
+        test_only: true,
+        match_only: true,
+    };
+    let drain = || async {
+        for _ in 0..50 {
+            if !w.step().await.unwrap() {
+                return;
+            }
+        }
+        panic!("job queue never drained");
+    };
+    let calls = || async {
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM llm_calls WHERE purpose = 'matching'")
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+    };
+
+    // Intake to approval: the approve hook queues derive_config.
+    call(&app, "POST", "/intake/start", &h, None).await;
+    for a in ANSWERS {
+        call(&app, "POST", "/intake/message", &h, Some(json!({"text": a}))).await;
+    }
+    call(&app, "POST", "/intake/playback", &h, None).await;
+    call(&app, "POST", "/intake/pitch", &h, None).await;
+    let (c, v) = call(&app, "POST", "/intake/approve", &h, None).await;
+    assert_eq!(c, StatusCode::OK, "{v}");
+    drain().await;
+    assert_eq!(calls().await, 6, "one call per company in reach; G is filtered first");
+
+    let (c, v) = call(&app, "GET", "/matching", &h, None).await;
+    assert_eq!(c, StatusCode::OK, "{v}");
+    assert_eq!(v["locked"], false);
+    assert_eq!(v["ranked"].as_array().unwrap().len(), 6, "{v}");
+    let digest = v["digest"].as_array().unwrap().clone();
+    assert_eq!(digest.len(), 5, "{v}");
+    let mut per_sub = std::collections::HashMap::new();
+    for it in &digest {
+        assert!(it["signal"]["source_url"].as_str().unwrap().starts_with("https://"));
+        assert_ne!(it["name"], "Testco G");
+        let path = format!("/matching/companies/{}", it["company_id"].as_str().unwrap());
+        let (c, d) = call(&app, "GET", &path, &h, None).await;
+        assert_eq!(c, StatusCode::OK, "{d}");
+        let facts = d["facts"].as_array().unwrap();
+        assert!(!facts.is_empty());
+        assert!(
+            facts
+                .iter()
+                .all(|f| f["source_url"].as_str().is_some_and(|u| !u.is_empty())),
+            "{d}"
+        );
+        assert_eq!(d["fit"]["axes"]["axes"].as_array().unwrap().len(), 7);
+        assert_eq!(d["fit"]["travel_min"], 20);
+        *per_sub.entry(d["company"]["subsector"].to_string()).or_insert(0) += 1;
+    }
+    assert!(
+        per_sub.values().all(|n| *n <= 2),
+        "at most 2 per sub-sector: {per_sub:?}"
+    );
+    let g: String = sqlx::query_scalar("SELECT id::text FROM companies WHERE name = 'Testco G'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let (_, d) = call(&app, "GET", &format!("/matching/companies/{g}"), &h, None).await;
+    assert!(d["fit"]["excluded"].as_str().is_some(), "{d}");
+
+    // A thumb down needs a reason; with one, it re-ranks from the cache.
+    let top = digest[0]["company_id"].as_str().unwrap().to_string();
+    let body = json!({"company_id": top, "up": false});
+    let (c, _) = call(&app, "POST", "/matching/feedback", &h, Some(body)).await;
+    assert_eq!(c, StatusCode::BAD_REQUEST);
+    let body = json!({"company_id": top, "up": false, "reason": "too much sales"});
+    let (c, v) = call(&app, "POST", "/matching/feedback", &h, Some(body)).await;
+    assert_eq!(c, StatusCode::OK, "{v}");
+    drain().await;
+    assert_eq!(calls().await, 6, "the axis cache answers the rescore");
+    let (_, d) = call(&app, "GET", &format!("/matching/companies/{top}"), &h, None).await;
+    assert!(d["fit"]["excluded"].as_str().is_some(), "dismissed: {d}");
+    assert_eq!(d["thumb"]["up"], false);
 }

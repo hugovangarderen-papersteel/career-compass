@@ -55,13 +55,34 @@ async fn main() -> anyhow::Result<()> {
         .filter(|v| !v.is_empty());
     let stt_model = std::env::var("CC_STT_MODEL").unwrap_or_else(|_| "Systran/faster-whisper-small".into());
 
-    // The enrichment lane: a task in this process, real model only (the mock answers intake only).
-    if let (Some(llm), false) = (&llm, mock_model) {
+    // Her home base for road travel times: "lat,lon", server config only (never in the repo).
+    let home = match std::env::var("CC_HOME_BASE") {
+        Ok(v) if !v.trim().is_empty() => {
+            let p: Vec<f64> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+            match p[..] {
+                [lat, lon] if (-90.0..=90.0).contains(&lat) && (-180.0..=180.0).contains(&lon) => Some((lat, lon)),
+                _ => bail!("CC_HOME_BASE must be \"lat,lon\""),
+            }
+        }
+        _ => {
+            tracing::warn!("CC_HOME_BASE not set: travel times stay UNKNOWN");
+            None
+        }
+    };
+    // The background lane: a task in this process. With the mock model it runs matching only.
+    if let Some(llm) = &llm {
         tokio::spawn(cc_worker::run(cc_worker::Worker {
             pool: pool.clone(),
             llm: llm.clone(),
             eur_per_usd,
             fetch: cc_enrich::Fetcher::new(std::time::Duration::from_secs(5)),
+            home,
+            osrm_url: std::env::var("CC_OSRM_URL")
+                .ok()
+                .filter(|u| !u.trim().is_empty())
+                .unwrap_or_else(|| cc_worker::OSRM.into()),
+            test_only,
+            match_only: mock_model,
         }));
     }
     let app = cc_api::app(cc_api::AppState {

@@ -13,6 +13,8 @@ use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
+pub mod matching;
+
 const PROMPT: &str = include_str!("extract_company.md");
 const PURPOSE: &str = "enrichment";
 const MAX_ATTEMPTS: i32 = 3;
@@ -45,7 +47,17 @@ pub struct Worker {
     pub llm: cc_llm::Client,
     pub eur_per_usd: f64,
     pub fetch: Fetcher,
+    /// Her home base as (lat, lon), from server config only; None = travel time UNKNOWN.
+    pub home: Option<(f64, f64)>,
+    /// The OSRM server (public demo by default).
+    pub osrm_url: String,
+    /// The test track: matching jobs of real accounts end without a model call.
+    pub test_only: bool,
+    /// Take only matching jobs (the mock model answers nothing else).
+    pub match_only: bool,
 }
+
+pub const OSRM: &str = "https://router.project-osrm.org";
 
 enum Outcome {
     Done,
@@ -58,23 +70,20 @@ enum Outcome {
 /// Runs forever: takes due jobs, sleeps 30 s when there are none.
 pub async fn run(w: Worker) {
     let _ = cc_db::requeue_running(&w.pool).await;
-    let _ = cc_db::enqueue(&w.pool, "refresh_signals", json!({}), Utc::now() + Duration::days(7)).await;
+    if !w.match_only {
+        let _ = cc_db::enqueue(&w.pool, "refresh_signals", json!({}), Utc::now() + Duration::days(7)).await;
+    }
+    let _ = cc_db::enqueue(
+        &w.pool,
+        "weekly_digest",
+        json!({}),
+        cc_core::matching::next_digest_at(Utc::now()),
+    )
+    .await;
     loop {
-        match cc_db::claim_job(&w.pool).await {
-            Ok(Some(job)) => {
-                if let Err(e) = w.handle(&job).await {
-                    tracing::warn!("job {} ({}) failed on the database: {e}", job.id, job.kind);
-                    let _ = cc_db::end_job(
-                        &w.pool,
-                        job.id,
-                        Some("database error"),
-                        Some(Utc::now() + Duration::minutes(10)),
-                        false,
-                    )
-                    .await;
-                }
-            }
-            Ok(None) => tokio::time::sleep(std::time::Duration::from_secs(30)).await,
+        match w.step().await {
+            Ok(true) => {}
+            Ok(false) => tokio::time::sleep(std::time::Duration::from_secs(30)).await,
             Err(e) => {
                 tracing::warn!("job queue unreachable: {e}");
                 tokio::time::sleep(std::time::Duration::from_secs(30)).await;
@@ -84,7 +93,30 @@ pub async fn run(w: Worker) {
 }
 
 impl Worker {
+    /// Takes and runs one due job; false when there was none.
+    pub async fn step(&self) -> Result<bool, sqlx::Error> {
+        let kinds = self.match_only.then_some(&matching::JOBS[..]);
+        let Some(job) = cc_db::claim_job(&self.pool, kinds).await? else {
+            return Ok(false);
+        };
+        if let Err(e) = self.handle(&job).await {
+            tracing::warn!("job {} ({}) failed on the database: {e}", job.id, job.kind);
+            cc_db::end_job(
+                &self.pool,
+                job.id,
+                Some("database error"),
+                Some(Utc::now() + Duration::minutes(10)),
+                false,
+            )
+            .await?;
+        }
+        Ok(true)
+    }
+
     async fn handle(&self, job: &cc_db::Job) -> Result<(), sqlx::Error> {
+        if matching::JOBS.contains(&job.kind.as_str()) {
+            return self.handle_match(job).await;
+        }
         if job.kind == "refresh_signals" {
             // Weekly: re-read every site (unchanged pages cost nothing); a full re-extraction monthly.
             for (id, last) in cc_db::company_ids(&self.pool).await? {
