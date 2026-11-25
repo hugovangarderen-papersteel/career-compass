@@ -99,7 +99,21 @@ impl Worker {
         let Some(job) = cc_db::claim_job(&self.pool, kinds).await? else {
             return Ok(false);
         };
-        if let Err(e) = self.handle(&job).await {
+        // A panic on one odd page fails that job (and its company), not the whole worker task.
+        let mut run = std::pin::pin!(self.handle(&job));
+        let res = std::future::poll_fn(|cx| {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run.as_mut().poll(cx))) {
+                Ok(p) => p.map(Ok),
+                Err(p) => std::task::Poll::Ready(Err(p)),
+            }
+        })
+        .await;
+        let Ok(res) = res else {
+            tracing::error!("job {} ({}) panicked", job.id, job.kind);
+            self.fail_panicked(job.id, &job.payload["company_id"]).await?;
+            return Ok(true);
+        };
+        if let Err(e) = res {
             tracing::warn!("job {} ({}) failed on the database: {e}", job.id, job.kind);
             cc_db::end_job(
                 &self.pool,
@@ -111,6 +125,21 @@ impl Worker {
             .await?;
         }
         Ok(true)
+    }
+
+    /// A job whose run panicked: failed for good (a retry would hit the same page), and its
+    /// company shows why instead of hanging on 'running'.
+    async fn fail_panicked(&self, job: Uuid, company: &Value) -> Result<(), sqlx::Error> {
+        const ERR: &str = "internal error while reading the site";
+        cc_db::end_job(&self.pool, job, Some(ERR), None, false).await?;
+        if let Some(id) = company.as_str().and_then(|s| s.parse::<Uuid>().ok()) {
+            sqlx::query("UPDATE companies SET status = 'failed', last_error = $2 WHERE id = $1")
+                .bind(id)
+                .bind(ERR)
+                .execute(&self.pool)
+                .await?;
+        }
+        Ok(())
     }
 
     async fn handle(&self, job: &cc_db::Job) -> Result<(), sqlx::Error> {
