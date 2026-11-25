@@ -634,6 +634,14 @@ async fn approve(State(st): State<AppState>, h: HeaderMap) -> ApiResult<Json<Val
     cc_db::approve_profile(&st.pool, user.id)
         .await?
         .ok_or(ApiError::Conflict("no_draft"))?;
+    // Matching starts from the approved version: config, then a rescore and the first digest.
+    cc_db::enqueue(
+        &st.pool,
+        "derive_config",
+        json!({"user_id": user.id}),
+        chrono::Utc::now(),
+    )
+    .await?;
     s.status = "approved".into();
     cc_db::save_session(&st.pool, &s).await?;
     view(&st, &user).await

@@ -577,7 +577,8 @@ pub async fn enqueue(
     sqlx::query(
         "INSERT INTO jobs (id, kind, payload, run_at) SELECT $1, $2, $3, $4 WHERE NOT EXISTS \
          (SELECT 1 FROM jobs WHERE kind = $2 AND status IN ('queued', 'running') \
-          AND payload->>'company_id' IS NOT DISTINCT FROM $3::jsonb->>'company_id')",
+          AND COALESCE(payload->>'company_id', payload->>'user_id') IS NOT DISTINCT FROM \
+          COALESCE($3::jsonb->>'company_id', $3::jsonb->>'user_id'))",
     )
     .bind(Uuid::new_v4())
     .bind(kind)
@@ -588,13 +589,15 @@ pub async fn enqueue(
     Ok(())
 }
 
-/// The oldest due job, taken so no other worker gets it.
-pub async fn claim_job(pool: &PgPool) -> Result<Option<Job>, Error> {
+/// The oldest due job (of these kinds, if given), taken so no other worker gets it.
+pub async fn claim_job(pool: &PgPool, kinds: Option<&[&str]>) -> Result<Option<Job>, Error> {
     let row = sqlx::query(
         "UPDATE jobs SET status = 'running', attempts = attempts + 1 WHERE id = \
-         (SELECT id FROM jobs WHERE status = 'queued' AND run_at <= now() ORDER BY run_at LIMIT 1 FOR UPDATE SKIP LOCKED) \
+         (SELECT id FROM jobs WHERE status = 'queued' AND run_at <= now() AND ($1::text[] IS NULL OR kind = ANY($1)) \
+          ORDER BY run_at LIMIT 1 FOR UPDATE SKIP LOCKED) \
          RETURNING id, kind, payload, attempts",
     )
+    .bind(kinds.map(|k| k.iter().map(|s| s.to_string()).collect::<Vec<_>>()))
     .fetch_optional(pool)
     .await?;
     Ok(row.map(|r| Job {

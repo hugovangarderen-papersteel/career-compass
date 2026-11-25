@@ -45,6 +45,9 @@ services:
       # Push-to-talk: the stt service below. Empty turns the mic off (503 stt_offline).
       CC_STT_URL: ${CC_STT_URL-http://stt:8000}
       CC_STT_MODEL: ${CC_STT_MODEL:-Systran/faster-whisper-small}
+      # Matching: her home base "lat,lon" lives only in deploy/.env (empty = travel times UNKNOWN).
+      CC_HOME_BASE: ${CC_HOME_BASE:-}
+      CC_OSRM_URL: ${CC_OSRM_URL:-}
     networks: [cc]
     mem_limit: 512m # a 10 MB PDF is parsed in memory
 

@@ -24,7 +24,11 @@ static TURN: AtomicUsize = AtomicUsize::new(0);
 /// The answer the request's schema asks for (the same switch as the test mock).
 fn answer(b: &Value) -> Option<Value> {
     let props = &b["output_config"]["format"]["schema"]["properties"];
-    Some(if props.get("phase_complete").is_some() {
+    Some(if props.get("skills_reason").is_some() {
+        json!({"skills": 0.7, "skills_reason": "Her strengths match what this company needs (test data).",
+            "mission": 0.6, "mission_reason": "Its mission sits close to her themes (test data).",
+            "anti_pref_hit": "", "working_language": "dutch"})
+    } else if props.get("phase_complete").is_some() {
         let i = TURN.fetch_add(1, Ordering::Relaxed) % QUESTIONS.len();
         json!({"message": QUESTIONS[i], "phase_complete": true})
     } else if props.get("timeline").is_some() {

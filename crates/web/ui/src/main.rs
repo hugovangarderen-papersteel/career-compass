@@ -300,7 +300,9 @@ fn Home(set_screen: WriteSignal<Screen>) -> impl IntoView {
                     .collect_view()}
             </nav>
             <main>
-                {move || if page.get() == 1 {
+                {move || if page.get() == 0 {
+                    view! { <ThisWeek set_screen=set_screen/> }.into_any()
+                } else if page.get() == 1 {
                     view! { <Kompas set_screen=set_screen/> }.into_any()
                 } else if page.get() == 2 {
                     view! { <Companies set_screen=set_screen/> }.into_any()
@@ -724,6 +726,190 @@ fn Companies(set_screen: WriteSignal<Screen>) -> impl IntoView {
                 </div>
             })
         }}
+    }
+}
+
+/// The weekly 5, the ranked list and one company's page with its fit per axis and thumbs.
+/// Locked until her profile is approved: never an empty or made-up list.
+#[component]
+fn ThisWeek(set_screen: WriteSignal<Screen>) -> impl IntoView {
+    let v = RwSignal::new(Value::Null);
+    let detail = RwSignal::new(Value::Null);
+    let note = RwSignal::new(None::<String>);
+    let reason = RwSignal::new(String::new());
+    let fail = move |e: String| match e.as_str() {
+        "unauthorized" => set_screen.set(Screen::Login),
+        "revoked" => set_screen.set(Screen::Unpaired(Some(nl(&e)))),
+        _ => note.set(Some(nl(&e))),
+    };
+    spawn_local(async move {
+        match api("GET", "/matching", None).await {
+            Ok(x) => v.set(x),
+            Err(e) => fail(e),
+        }
+    });
+    let open = move |id: String| {
+        spawn_local(async move {
+            match api("GET", &format!("/matching/companies/{id}"), None).await {
+                Ok(x) => {
+                    reason.set(String::new());
+                    detail.set(x)
+                }
+                Err(e) => fail(e),
+            }
+        })
+    };
+    let thumb = move |id: String, up: bool| {
+        let r = reason.get();
+        if !up && r.trim().is_empty() {
+            note.set(Some(
+                "Say in a few words why it is not for you; that is what the ranking learns from.".into(),
+            ));
+            return;
+        }
+        spawn_local(async move {
+            let body = json!({"company_id": id, "up": up, "reason": r});
+            match api("POST", "/matching/feedback", Some(body)).await {
+                Ok(_) => {
+                    note.set(Some("Thanks. The ranking is updated in the background.".into()));
+                    open(id);
+                }
+                Err(e) => fail(e),
+            }
+        })
+    };
+    view! {
+        <h1>"This week"</h1>
+        {move || note.get().map(|n| view! { <p class="meta">{n}</p> })}
+        {move || {
+            let x = v.get();
+            if x.is_null() {
+                return view! { <p>"One moment..."</p> }.into_any();
+            }
+            if x["locked"] == true {
+                return view! { <div class="card"><p>{s(&x["message"])}</p></div> }.into_any();
+            }
+            let digest = items(&x["digest"]);
+            let ranked = items(&x["ranked"]);
+            view! {
+                {(x["scoring"] == true).then(|| view! {
+                    <div class="card"><p>"Your companies are being scored. Check back in a few minutes."</p></div>
+                })}
+                {(!digest.is_empty()).then(|| view! {
+                    <div class="card">
+                        <h2>"Your 5 this week"</h2>
+                        {digest.into_iter().map(|it| {
+                            let id = s(&it["company_id"]);
+                            let sig = it["signal"].clone();
+                            view! {
+                                <div class="fact">
+                                    <button class="link" on:click=move |_| open(id.clone())>
+                                        {format!("{} · fit {}", s(&it["name"]), it["score"])}
+                                    </button>
+                                    <p>{format!("Why you: {}", s(&it["why_her"]))}</p>
+                                    <p>{format!("Why them: {}", s(&it["why_them"]))}</p>
+                                    <p>
+                                        {format!("Why now: {} · {}", s(&sig["dated"]), s(&sig["detail"]))}
+                                        {source(&sig["source_url"])}
+                                    </p>
+                                </div>
+                            }
+                        }).collect_view()}
+                    </div>
+                })}
+                {(!ranked.is_empty()).then(|| view! {
+                    <div class="card">
+                        <h2>"All companies by fit"</h2>
+                        {ranked.into_iter().map(|c| {
+                            let id = s(&c["company_id"]);
+                            let travel = c["travel_min"]
+                                .as_i64()
+                                .map_or("travel time UNKNOWN".to_string(), |m| format!("{m} min by car"));
+                            let line = format!("fit {} · {} · {}", c["score"], s(&c["subsector"]), travel);
+                            view! {
+                                <div class="row">
+                                    <button class="link" on:click=move |_| open(id.clone())>{s(&c["name"])}</button>
+                                    <span class="meta">{line}</span>
+                                </div>
+                            }
+                        }).collect_view()}
+                    </div>
+                })}
+            }
+            .into_any()
+        }}
+        {move || {
+            let d = detail.get();
+            let c = d["company"].clone();
+            let id = s(&c["id"]);
+            (!id.is_empty()).then(|| {
+                let fit = d["fit"].clone();
+                let verdict = match (fit["score"].as_f64(), s(&fit["excluded"])) {
+                    (_, ex) if !ex.is_empty() => format!("Left out: {ex}"),
+                    (Some(sc), _) => format!("Fit {sc:.0} of 100 · {}", s(&fit["axes"]["travel"])),
+                    _ => "Not scored yet".to_string(),
+                };
+                let thumbed = match d["thumb"]["up"].as_bool() {
+                    Some(true) => "You gave it a thumbs up.".to_string(),
+                    Some(false) => format!("You said it is not for you: {}", s(&d["thumb"]["reason"])),
+                    None => String::new(),
+                };
+                let (up_id, down_id) = (id.clone(), id);
+                view! {
+                    <div class="card">
+                        <h2>{s(&c["name"])}</h2>
+                        <p><a href=s(&c["website"]) target="_blank" rel="noopener noreferrer">{s(&c["website"])}</a></p>
+                        <p>{s(&c["mission_summary"])}</p>
+                        <h3>"Your fit"</h3>
+                        <p>{verdict}</p>
+                        {items(&fit["axes"]["axes"]).into_iter().map(|a| view! {
+                            <p class="fact">{format!("{} · {:.0}% (weight {:.0}%) · {}",
+                                axis_label(&s(&a["axis"])),
+                                a["score"].as_f64().unwrap_or(0.0) * 100.0,
+                                a["weight"].as_f64().unwrap_or(0.0) * 100.0,
+                                s(&a["reason"]))}</p>
+                        }).collect_view()}
+                        {items(&fit["axes"]["penalty_reasons"]).into_iter().map(|p| view! {
+                            <p class="fact">{format!("Lower because you said: {}", s(&p))}</p>
+                        }).collect_view()}
+                        <p class="meta">{thumbed}</p>
+                        <div class="row">
+                            <button on:click=move |_| thumb(up_id.clone(), true)>"Thumbs up"</button>
+                            <input type="text" placeholder="Not for me, because..." bind:value=reason/>
+                            <button class="secondary" on:click=move |_| thumb(down_id.clone(), false)>"Thumbs down"</button>
+                        </div>
+                        <h3>"Facts"</h3>
+                        {items(&d["facts"]).into_iter().map(|f| view! {
+                            <p class="fact">{format!("{}: {}", s(&f["field"]), s(&f["value"]))}{source(&f["source_url"])}</p>
+                        }).collect_view()}
+                        <h3>"Timeline"</h3>
+                        {items(&d["events"]).into_iter().map(|e| view! {
+                            <p class="fact">{format!("{} · {}", s(&e["date"]), s(&e["title"]))}{source(&e["source_url"])}</p>
+                        }).collect_view()}
+                        <h3>"Signals"</h3>
+                        {items(&d["signals"]).into_iter().map(|g| view! {
+                            <p class="fact">
+                                {format!("{} · {} · {}", s(&g["dated"]), s(&g["kind"]), s(&g["detail"]))}
+                                {source(&g["source_url"])}
+                            </p>
+                        }).collect_view()}
+                    </div>
+                }
+            })
+        }}
+    }
+}
+
+fn axis_label(a: &str) -> &'static str {
+    match a {
+        "skills" => "Your skills",
+        "why_now" => "Why now",
+        "mission" => "Mission",
+        "subsector" => "Sub-sector",
+        "stage" => "Stage",
+        "role" => "Role",
+        "network" => "Network",
+        _ => "Other",
     }
 }
 
