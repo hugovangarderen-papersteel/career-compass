@@ -59,7 +59,7 @@ pub fn routes() -> Router<AppState> {
         .route("/intake/audio", post(audio).layer(DefaultBodyLimit::max(BODY_LIMIT)))
 }
 
-async fn who(st: &AppState, h: &HeaderMap) -> ApiResult<cc_db::User> {
+pub(crate) async fn who(st: &AppState, h: &HeaderMap) -> ApiResult<cc_db::User> {
     let c = session_from_headers(st, h).await?;
     cc_db::user_by_id(&st.pool, c.sub).await?.ok_or(ApiError::Unauthorized)
 }

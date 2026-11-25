@@ -75,10 +75,11 @@
     return { ok: true };
   }
 
-  // Same rule as `allowed` in src-tauri: her intake and who she is, nothing else.
+  // Same rule as `allowed` in src-tauri: her intake, who she is and the companies.
   const allowed = (m, p) =>
     (m === "GET" || m === "POST") && !p.includes("..") && !p.includes("?") &&
-    (p === "/me" || p === "/intake" || p.startsWith("/intake/"));
+    (["/me", "/intake", "/companies", "/admin/companies"].includes(p) ||
+      p.startsWith("/intake/") || p.startsWith("/admin/companies/"));
 
   async function authed(method, path, body, ms) {
     const jwt = ss.getItem("cc-session");

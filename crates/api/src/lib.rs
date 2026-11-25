@@ -47,6 +47,7 @@ pub struct AppState {
     pub stt_model: String,
 }
 
+mod companies;
 mod intake;
 
 pub fn app(state: AppState) -> Router {
@@ -61,7 +62,8 @@ pub fn app(state: AppState) -> Router {
         .route("/stark/status", get(stark_status))
         .route("/stark/pairing/{id}/decision", post(stark_decide))
         .route("/stark/devices/{id}/revoke", post(stark_revoke))
-        .merge(intake::routes());
+        .merge(intake::routes())
+        .merge(companies::routes());
     if let Some(dir) = &state.web_dir {
         r = r
             .route("/app", get(|| async { axum::response::Redirect::permanent("/app/") }))

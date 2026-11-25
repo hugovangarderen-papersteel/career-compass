@@ -557,3 +557,268 @@ pub async fn set_fact(pool: &PgPool, user: Uuid, id: Uuid, status: &str, text: O
             .await?;
     Ok(r.rows_affected() == 1)
 }
+
+// ---------- jobs ----------
+
+pub struct Job {
+    pub id: Uuid,
+    pub kind: String,
+    pub payload: serde_json::Value,
+    pub attempts: i32,
+}
+
+/// Queues a job, unless one of the same kind for the same company is already waiting.
+pub async fn enqueue(
+    pool: &PgPool,
+    kind: &str,
+    payload: serde_json::Value,
+    run_at: DateTime<Utc>,
+) -> Result<(), Error> {
+    sqlx::query(
+        "INSERT INTO jobs (id, kind, payload, run_at) SELECT $1, $2, $3, $4 WHERE NOT EXISTS \
+         (SELECT 1 FROM jobs WHERE kind = $2 AND status IN ('queued', 'running') \
+          AND payload->>'company_id' IS NOT DISTINCT FROM $3::jsonb->>'company_id')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(kind)
+    .bind(&payload)
+    .bind(run_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// The oldest due job, taken so no other worker gets it.
+pub async fn claim_job(pool: &PgPool) -> Result<Option<Job>, Error> {
+    let row = sqlx::query(
+        "UPDATE jobs SET status = 'running', attempts = attempts + 1 WHERE id = \
+         (SELECT id FROM jobs WHERE status = 'queued' AND run_at <= now() ORDER BY run_at LIMIT 1 FOR UPDATE SKIP LOCKED) \
+         RETURNING id, kind, payload, attempts",
+    )
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| Job {
+        id: r.get("id"),
+        kind: r.get("kind"),
+        payload: r.get("payload"),
+        attempts: r.get("attempts"),
+    }))
+}
+
+/// `retry_at` None: done, or with an error failed for good. `refund` gives back an attempt
+/// that never ran (paused by the spend cap).
+pub async fn end_job(
+    pool: &PgPool,
+    id: Uuid,
+    error: Option<&str>,
+    retry_at: Option<DateTime<Utc>>,
+    refund: bool,
+) -> Result<(), Error> {
+    let status = match (error, retry_at) {
+        (_, Some(_)) => "queued",
+        (Some(_), None) => "failed",
+        (None, None) => "done",
+    };
+    sqlx::query(
+        "UPDATE jobs SET status = $2, last_error = $3, run_at = COALESCE($4, run_at), \
+         attempts = attempts - CASE WHEN $5 THEN 1 ELSE 0 END WHERE id = $1",
+    )
+    .bind(id)
+    .bind(status)
+    .bind(error)
+    .bind(retry_at)
+    .bind(refund)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// After a restart nothing is running: what was is due again.
+pub async fn requeue_running(pool: &PgPool) -> Result<(), Error> {
+    sqlx::query("UPDATE jobs SET status = 'queued' WHERE status = 'running'")
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+// ---------- companies ----------
+
+/// Adds a company by its site root (`cc_core::company::site_root`) and queues its enrichment.
+/// Returns its id and whether it was new.
+pub async fn add_company(pool: &PgPool, name: &str, site: &str, added_by: Option<Uuid>) -> Result<(Uuid, bool), Error> {
+    let new = sqlx::query(
+        "INSERT INTO companies (id, name, website, added_by) VALUES ($1, $2, $3, $4) \
+         ON CONFLICT (website) DO NOTHING RETURNING id",
+    )
+    .bind(Uuid::new_v4())
+    .bind(name)
+    .bind(site)
+    .bind(added_by)
+    .fetch_optional(pool)
+    .await?;
+    let id: Uuid = match &new {
+        Some(r) => r.get("id"),
+        None => sqlx::query("SELECT id FROM companies WHERE website = $1")
+            .bind(site)
+            .fetch_one(pool)
+            .await?
+            .get("id"),
+    };
+    if new.is_some() {
+        enqueue_enrich(pool, id, false).await?;
+    }
+    Ok((id, new.is_some()))
+}
+
+pub async fn enqueue_enrich(pool: &PgPool, id: Uuid, force: bool) -> Result<(), Error> {
+    enqueue(
+        pool,
+        "enrich_company",
+        serde_json::json!({"company_id": id, "force": force}),
+        Utc::now(),
+    )
+    .await?;
+    sqlx::query("UPDATE companies SET status = 'queued' WHERE id = $1")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Loads the researched seed CSV (the header row names the columns). Its evidence becomes
+/// `seed` facts, each with the source URL the research gave; a row without a usable site is
+/// skipped. Returns (added, already known, skipped).
+pub async fn import_seed(pool: &PgPool, csv: &str) -> Result<(usize, usize, usize), Error> {
+    let rows = cc_core::company::parse_csv(csv);
+    let Some((head, rows)) = rows.split_first() else {
+        return Ok((0, 0, 0));
+    };
+    let col = |r: &[String], name: &str| {
+        head.iter()
+            .position(|h| h.trim() == name)
+            .and_then(|i| r.get(i))
+            .map(|v| v.trim().to_string())
+            .unwrap_or_default()
+    };
+    let (mut added, mut known, mut skipped) = (0, 0, 0);
+    for r in rows {
+        let name = col(r, "name");
+        let Some(site) = cc_core::company::site_root(&col(r, "website")).filter(|_| !name.is_empty()) else {
+            skipped += 1;
+            continue;
+        };
+        let (id, new) = add_company(pool, &name, &site, None).await?;
+        if !new {
+            known += 1;
+            continue;
+        }
+        added += 1;
+        let opt = |s: String| (!s.is_empty()).then_some(s);
+        sqlx::query("UPDATE companies SET city = $2, subsector = $3, stage = $4 WHERE id = $1")
+            .bind(id)
+            .bind(opt(col(r, "city")))
+            .bind(opt(col(r, "subsector")))
+            .bind(opt(col(r, "stage")))
+            .execute(pool)
+            .await?;
+        let facts = [
+            (
+                "stage",
+                col(r, "stage"),
+                col(r, "stage_evidence"),
+                col(r, "stage_source_url"),
+            ),
+            (
+                "headcount",
+                col(r, "headcount_stated"),
+                col(r, "stage_evidence"),
+                col(r, "stage_source_url"),
+            ),
+            (
+                "philips_link",
+                col(r, "philips_link"),
+                col(r, "philips_link"),
+                col(r, "philips_source_url"),
+            ),
+            (
+                "listed_on",
+                col(r, "found_on_list"),
+                col(r, "found_on_list"),
+                col(r, "list_url"),
+            ),
+        ];
+        for (field, value, snippet, url) in facts {
+            let empty = matches!(value.to_lowercase().as_str(), "" | "no" | "unknown" | "false" | "n/a");
+            if empty || !url.starts_with("http") {
+                continue;
+            }
+            sqlx::query(
+                "INSERT INTO company_facts (id, company_id, field, value, source_url, snippet, origin) \
+                 VALUES ($1, $2, $3, $4, $5, $6, 'seed') ON CONFLICT DO NOTHING",
+            )
+            .bind(Uuid::new_v4())
+            .bind(id)
+            .bind(field)
+            .bind(&value)
+            .bind(&url)
+            .bind(if snippet.is_empty() { &value } else { &snippet })
+            .execute(pool)
+            .await?;
+        }
+    }
+    Ok((added, known, skipped))
+}
+
+/// The admin list: one object per company with its counts.
+pub async fn company_list(pool: &PgPool) -> Result<serde_json::Value, Error> {
+    let row = sqlx::query(
+        "SELECT COALESCE(json_agg(c ORDER BY c.name), '[]'::json) AS v FROM ( \
+           SELECT id, name, website, city, status, last_error, dropped, last_fetched_at, last_enriched_at, \
+             (SELECT count(*) FROM company_facts f WHERE f.company_id = companies.id) AS facts, \
+             (SELECT count(*) FROM signals s WHERE s.company_id = companies.id) AS signals \
+           FROM companies) c",
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(row.get("v"))
+}
+
+/// One company: its row, facts, timeline (newest first), signals and people. None if unknown.
+pub async fn company_detail(pool: &PgPool, id: Uuid) -> Result<Option<serde_json::Value>, Error> {
+    let row = sqlx::query(
+        "SELECT json_build_object( \
+           'company', (SELECT to_jsonb(c) - 'content_hash' FROM companies c WHERE id = $1), \
+           'facts', (SELECT COALESCE(json_agg(f ORDER BY f.field, f.fetched_at), '[]'::json) FROM \
+              (SELECT field, value, source_url, snippet, origin, fetched_at FROM company_facts WHERE company_id = $1) f), \
+           'events', (SELECT COALESCE(json_agg(e ORDER BY e.date DESC), '[]'::json) FROM \
+              (SELECT date, kind, title, source_url, snippet FROM company_events WHERE company_id = $1) e), \
+           'signals', (SELECT COALESCE(json_agg(s ORDER BY s.dated DESC), '[]'::json) FROM \
+              (SELECT kind, dated, detail, source_url, detected_at FROM signals WHERE company_id = $1) s), \
+           'people', (SELECT COALESCE(json_agg(p ORDER BY p.name), '[]'::json) FROM \
+              (SELECT name, role, source_url, suggested_contact FROM people WHERE company_id = $1) p) \
+         ) AS v WHERE EXISTS (SELECT 1 FROM companies WHERE id = $1)",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await?;
+    Ok(row.map(|r| r.get("v")))
+}
+
+/// EUR spent on one purpose in the last `days` days.
+pub async fn spend_since(pool: &PgPool, purpose: &str, days: i64) -> Result<f64, Error> {
+    let row = sqlx::query(
+        "SELECT COALESCE(SUM(cost_eur), 0)::float8 AS s FROM llm_calls WHERE purpose = $1 AND created_at >= $2",
+    )
+    .bind(purpose)
+    .bind(Utc::now() - Duration::days(days))
+    .fetch_one(pool)
+    .await?;
+    Ok(row.get("s"))
+}
+
+pub async fn company_ids(pool: &PgPool) -> Result<Vec<(Uuid, Option<DateTime<Utc>>)>, Error> {
+    let rows = sqlx::query("SELECT id, last_enriched_at FROM companies")
+        .fetch_all(pool)
+        .await?;
+    Ok(rows.iter().map(|r| (r.get("id"), r.get("last_enriched_at"))).collect())
+}

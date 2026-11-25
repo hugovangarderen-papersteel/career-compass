@@ -626,3 +626,87 @@ async fn mock_model_answers_test_accounts_only(pool: PgPool) {
     assert_eq!(c, StatusCode::OK, "{v}");
     assert_eq!(seen.lock().unwrap().len(), 1);
 }
+
+/// The company base: a synthetic seed, add-by-URL for anyone signed in, the admin views.
+#[sqlx::test(migrations = "../db/migrations")]
+async fn company_base_seed_add_admin(pool: PgPool) {
+    let seed = "name,website,city,stage,stage_evidence,stage_source_url,headcount_stated,philips_link,philips_source_url\n\
+        Testco Health,https://testco.example/about,Testdorp,scale-up,\"Raised a Series A\",https://news.example/testco,40,no,\n\
+        ,https://nameless.example,Testdorp,,,,,,\n";
+    assert_eq!(cc_db::import_seed(&pool, seed).await.unwrap(), (1, 0, 1));
+    assert_eq!(
+        cc_db::import_seed(&pool, seed).await.unwrap(),
+        (0, 1, 1),
+        "import is idempotent"
+    );
+
+    cc_db::create_user(&pool, "seeker@example.org", cc_core::Role::Seeker)
+        .await
+        .unwrap();
+    cc_db::create_user(&pool, "admin@example.org", cc_core::Role::Admin)
+        .await
+        .unwrap();
+    let app = app(pool.clone(), None);
+    let seeker = login(&app, "seeker@example.org").await;
+    let admin = login(&app, "admin@example.org").await;
+
+    let (c, v) = call(
+        &app,
+        "POST",
+        "/companies",
+        &seeker,
+        Some(json!({"url": "medtech.example/jobs?x=1"})),
+    )
+    .await;
+    assert_eq!(c, StatusCode::OK, "{v}");
+    assert_eq!(v["website"], "https://medtech.example/");
+    assert_eq!(v["new"], true);
+    let (_, again) = call(
+        &app,
+        "POST",
+        "/companies",
+        &seeker,
+        Some(json!({"url": "https://medtech.example"})),
+    )
+    .await;
+    assert_eq!(
+        (again["id"].clone(), again["new"].clone()),
+        (v["id"].clone(), json!(false))
+    );
+    let (c, _) = call(&app, "POST", "/companies", &seeker, Some(json!({"url": "not a url"}))).await;
+    assert_eq!(c, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        call(&app, "GET", "/admin/companies", &seeker, None).await.0,
+        StatusCode::FORBIDDEN
+    );
+
+    let (c, v) = call(&app, "GET", "/admin/companies", &admin, None).await;
+    assert_eq!(c, StatusCode::OK, "{v}");
+    let list = v["companies"].as_array().unwrap();
+    assert_eq!(list.len(), 2);
+    let testco = list.iter().find(|c| c["name"] == "Testco Health").unwrap();
+    assert_eq!(
+        (testco["status"].clone(), testco["facts"].clone()),
+        (json!("queued"), json!(2))
+    );
+    let id = testco["id"].as_str().unwrap();
+
+    let (c, d) = call(&app, "GET", &format!("/admin/companies/{id}"), &admin, None).await;
+    assert_eq!(c, StatusCode::OK, "{d}");
+    assert_eq!(d["company"]["city"], "Testdorp");
+    assert!(d["facts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|f| f["source_url"] == "https://news.example/testco"));
+    let (c, v) = call(&app, "POST", &format!("/admin/companies/{id}/enrich"), &admin, None).await;
+    assert_eq!((c, v["queued"].clone()), (StatusCode::OK, json!(true)));
+    let unknown = format!("/admin/companies/{}", uuid::Uuid::new_v4());
+    assert_eq!(call(&app, "GET", &unknown, &admin, None).await.0, StatusCode::NOT_FOUND);
+    // One enrich job per company, however often it is asked for.
+    let jobs: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs WHERE kind = 'enrich_company'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(jobs, 2);
+}

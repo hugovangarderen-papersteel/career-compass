@@ -197,12 +197,15 @@ async fn me(session: tauri::State<'_, Session>) -> Result<Value, String> {
     Ok(body)
 }
 
-/// The only paths the window may reach through `api`: her intake and who she is.
+/// The only paths the window may reach through `api`: her intake, who she is and the
+/// companies (the server keeps the admin views to the admin role).
 fn allowed(method: &str, path: &str) -> bool {
     matches!(method, "GET" | "POST")
         && !path.contains("..")
         && !path.contains('?')
-        && (path == "/me" || path == "/intake" || path.starts_with("/intake/"))
+        && (["/me", "/intake", "/companies", "/admin/companies"].contains(&path)
+            || path.starts_with("/intake/")
+            || path.starts_with("/admin/companies/"))
 }
 
 /// One call to her own data on the server. Making her profile can take a minute, hence 120 s.
@@ -277,5 +280,8 @@ mod tests {
         assert!(!super::allowed("POST", "/intake/../stark/status"));
         assert!(!super::allowed("DELETE", "/intake"));
         assert!(!super::allowed("GET", "/intakeX"));
+        assert!(super::allowed("POST", "/companies"));
+        assert!(super::allowed("POST", "/admin/companies/abc/enrich"));
+        assert!(!super::allowed("GET", "/admin/users"));
     }
 }

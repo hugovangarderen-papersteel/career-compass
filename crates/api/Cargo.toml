@@ -17,6 +17,8 @@ path = "src/bin/cc-admin.rs"
 cc-core.workspace = true
 cc-db.workspace = true
 cc-llm.workspace = true
+cc-worker = { path = "../worker" }
+cc-enrich = { path = "../enrich" }
 serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
