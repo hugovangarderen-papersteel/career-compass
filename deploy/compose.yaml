@@ -66,6 +66,9 @@ services:
     volumes:
       - hf-hub-cache:/home/ubuntu/.cache/huggingface/hub
     networks: [cc]
+    environment:
+      # keep the Whisper model loaded: the 5-min default unload cost 20+ s on the first answer after idle
+      WHISPER__TTL: "-1"
     mem_limit: 2g
 
   tunnel:
