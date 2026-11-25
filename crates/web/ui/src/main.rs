@@ -45,6 +45,9 @@ export function mic_stop() {
     r.stop();
   });
 }
+export async function copy_text(t) {
+  await navigator.clipboard.writeText(t);
+}
 export async function read_file(ev) {
   const input = ev.target, f = input.files && input.files[0];
   input.value = "";
@@ -58,6 +61,8 @@ extern "C" {
     async fn mic_stop() -> Result<JsValue, JsValue>;
     #[wasm_bindgen(catch)]
     async fn read_file(ev: JsValue) -> Result<JsValue, JsValue>;
+    #[wasm_bindgen(catch)]
+    async fn copy_text(t: &str) -> Result<JsValue, JsValue>;
 }
 
 /// A JS helper's answer as JSON; `None` when it failed or gave nothing.
@@ -148,6 +153,12 @@ fn nl(e: &str) -> String {
         "no_mic" => "Career Compass may not use the microphone. You can allow it in System Settings, under Privacy & Security, Microphone.".into(),
         "bad_audio" => "That recording didn't come through. Please try again.".into(),
         "no_speech" => "I didn't hear any words. Please try again, a little closer to the microphone.".into(),
+        "pick_a_fact" => "Please choose the one fact about the company that the email may use.".into(),
+        "fact_not_sourced" => "That fact has no source, so it can't go in an email.".into(),
+        "note_required" => "Please add a short note, so you know later what happened.".into(),
+        "website_needed" => "Please add the company's website first.".into(),
+        "nothing_sent_yet" => "There is no sent email to follow up on yet.".into(),
+        "already_sent" => "You already marked this one as sent.".into(),
         "unsupported_file" => "I can read PDF, Word (.docx) and text files. Please choose one of those.".into(),
         "unreadable_file" => "I couldn't open that file. Is it perhaps damaged or protected?".into(),
         "no_text" => "I couldn't find any text in that file. Is it perhaps a scan? Then please paste the text instead.".into(),
@@ -306,6 +317,10 @@ fn Home(set_screen: WriteSignal<Screen>) -> impl IntoView {
                     view! { <Kompas set_screen=set_screen/> }.into_any()
                 } else if page.get() == 2 {
                     view! { <Companies set_screen=set_screen/> }.into_any()
+                } else if page.get() == 5 {
+                    view! { <Studio set_screen=set_screen/> }.into_any()
+                } else if page.get() == 6 {
+                    view! { <Pipeline set_screen=set_screen/> }.into_any()
                 } else {
                     view! {
                         <h1>{MENU[page.get()]}</h1>
@@ -1269,4 +1284,474 @@ fn Reset(ctx: Ctx) -> impl IntoView {
 fn main() {
     console_error_panic_hook::set_once();
     leptos::mount::mount_to_body(App);
+}
+
+/// Percent-encoding for a mailto: link (RFC 6068): everything but letters and digits.
+fn enc(t: &str) -> String {
+    t.bytes()
+        .map(|b| {
+            if b.is_ascii_alphanumeric() {
+                (b as char).to_string()
+            } else {
+                format!("%{b:02X}")
+            }
+        })
+        .collect()
+}
+
+fn copy(t: String, note: RwSignal<Option<String>>) {
+    spawn_local(async move {
+        note.set(Some(match copy_text(&t).await {
+            Ok(_) => "Copied. You can paste it into your email or LinkedIn now.".into(),
+            Err(_) => "Copying didn't work; please select the text and copy it yourself.".into(),
+        }))
+    });
+}
+
+/// One draft: three versions she can edit, rank, copy, open in her mail program and mark as
+/// sent; a box for changes ("warmer", "shorter"); the LinkedIn note and the phone opener.
+#[component]
+fn Draft(d: RwSignal<Value>, note: RwSignal<Option<String>>, done: Callback<()>) -> impl IntoView {
+    let ask = RwSignal::new(String::new());
+    let tweak = move |t: String| {
+        let id = s(&d.get_untracked()["id"]);
+        note.set(Some("Rewriting all three versions...".into()));
+        spawn_local(async move {
+            match api("POST", &format!("/outreach/drafts/{id}/tweak"), Some(json!({"ask": t}))).await {
+                Ok(x) => {
+                    note.set(None);
+                    d.set(x)
+                }
+                Err(e) => note.set(Some(nl(&e))),
+            }
+        })
+    };
+    move || {
+        let x = d.get();
+        if x.is_null() {
+            return view! { <span></span> }.into_any();
+        }
+        let id = s(&x["id"]);
+        let n = items(&x["versions"]).len();
+        let versions = items(&x["versions"])
+            .into_iter()
+            .enumerate()
+            .map(|(i, v)| {
+                let subject = s(&v["subject"]);
+                let body = RwSignal::new(s(&v["body"]));
+                let problems = items(&v["problems"]);
+                let (id1, id2) = (id.clone(), id.clone());
+                let subj = subject.clone();
+                let best = move |_| {
+                    let mut order: Vec<usize> = (0..n).filter(|&j| j != i).collect();
+                    order.insert(0, i);
+                    let id = id1.clone();
+                    spawn_local(async move {
+                        let r = api("POST", &format!("/outreach/drafts/{id}/rank"), Some(json!({"order": order}))).await;
+                        note.set(Some(r.map_or_else(|e| nl(&e), |_| "Noted. Later emails will lean towards this one.".into())));
+                    })
+                };
+                let sent = move |_| {
+                    let (id, text) = (id2.clone(), body.get_untracked());
+                    spawn_local(async move {
+                        match api("POST", &format!("/outreach/drafts/{id}/sent"), Some(json!({"text": text}))).await {
+                            Ok(r) if r["ok"] == true => {
+                                note.set(Some("Saved as sent. You'll find it on your Pipeline.".into()));
+                                done.run(());
+                            }
+                            Ok(r) => note.set(Some(format!(
+                                "Not saved yet. Please fix this first: {}",
+                                items(&r["problems"]).iter().map(s).collect::<Vec<_>>().join("; ")
+                            ))),
+                            Err(e) => note.set(Some(nl(&e))),
+                        }
+                    })
+                };
+                view! {
+                    <div class="fact">
+                        <h3>{format!("Version {} · {}", i + 1, s(&v["tone"]))}</h3>
+                        <p>{format!("Subject: {subject}")}</p>
+                        <textarea rows="10" prop:value=move || body.get() on:input=move |ev| body.set(event_target_value(&ev))></textarea>
+                        {(!problems.is_empty()).then(|| view! {
+                            <p class="meta">{format!("Check before sending: {}", problems.iter().map(s).collect::<Vec<_>>().join("; "))}</p>
+                        })}
+                        <button on:click=best>"This one is best"</button>
+                        <button on:click=move |_| copy(body.get_untracked(), note)>"Copy"</button>
+                        <a href=move || format!("mailto:?subject={}&body={}", enc(&subj), enc(&body.get())) target="_blank">"Open in my mail"</a>
+                        <button on:click=sent>"I sent it"</button>
+                    </div>
+                }
+            })
+            .collect_view();
+        let linkedin = s(&x["linkedin"]);
+        let li = linkedin.clone();
+        view! {
+            <div class="card">
+                <h2>{format!("Emails for {}", s(&x["company"]))}</h2>
+                <p class="meta">
+                    {format!("Built from this fact only: {}", s(&x["fact"]["text"]))}
+                    {source(&x["fact"]["source_url"])}
+                </p>
+                {versions}
+                <p>"Would you like them different? Say how, and all three are rewritten."</p>
+                <button on:click=move |_| tweak("warmer".into())>"Warmer"</button>
+                <button on:click=move |_| tweak("shorter".into())>"Shorter"</button>
+                <input prop:value=move || ask.get() on:input=move |ev| ask.set(event_target_value(&ev))/>
+                <button on:click=move |_| tweak(ask.get_untracked())>"Rewrite"</button>
+                <h3>{format!("LinkedIn note ({} of 300 characters)", linkedin.chars().count())}</h3>
+                <p>{linkedin}</p>
+                <button on:click=move |_| copy(li.clone(), note)>"Copy"</button>
+                <h3>"If you phone them: how to start"</h3>
+                <p>{s(&x["phone"])}</p>
+            </div>
+        }
+        .into_any()
+    }
+}
+
+/// Outreach studio: pick a company, pick the ONE sourced fact, say who and in which language,
+/// and get three versions to choose from.
+#[component]
+fn Studio(set_screen: WriteSignal<Screen>) -> impl IntoView {
+    let v = RwSignal::new(Value::Null);
+    let facts = RwSignal::new(Value::Null);
+    let (company, fact) = (RwSignal::new(String::new()), RwSignal::new(String::new()));
+    let (role, name, times) = (
+        RwSignal::new(String::new()),
+        RwSignal::new(String::new()),
+        RwSignal::new(String::new()),
+    );
+    let dutch = RwSignal::new(false);
+    let d = RwSignal::new(Value::Null);
+    let note = RwSignal::new(None::<String>);
+    let fail = move |e: String| match e.as_str() {
+        "unauthorized" => set_screen.set(Screen::Login),
+        "revoked" => set_screen.set(Screen::Unpaired(Some(nl(&e)))),
+        _ => note.set(Some(nl(&e))),
+    };
+    spawn_local(async move {
+        match api("GET", "/matching", None).await {
+            Ok(x) => v.set(x),
+            Err(e) => fail(e),
+        }
+    });
+    let pick = move |id: String| {
+        company.set(id.clone());
+        fact.set(String::new());
+        d.set(Value::Null);
+        spawn_local(async move {
+            match api("GET", &format!("/outreach/companies/{id}/facts"), None).await {
+                Ok(x) => facts.set(x),
+                Err(e) => fail(e),
+            }
+        })
+    };
+    let write = move |_| {
+        let body = json!({"company_id": company.get_untracked(), "fact_id": fact.get_untracked(),
+            "contact_role": role.get_untracked(), "contact_name": name.get_untracked(),
+            "times": times.get_untracked(), "language": if dutch.get_untracked() { "nl" } else { "en" }});
+        note.set(Some("Writing three versions; this takes about half a minute...".into()));
+        spawn_local(async move {
+            match api("POST", "/outreach/drafts", Some(body)).await {
+                Ok(x) => {
+                    note.set(None);
+                    d.set(x)
+                }
+                Err(e) => fail(e),
+            }
+        })
+    };
+    view! {
+        <h1>"Outreach studio"</h1>
+        {move || note.get().map(|n| view! { <p class="meta">{n}</p> })}
+        {move || {
+            let x = v.get();
+            if x.is_null() {
+                return view! { <p>"One moment..."</p> }.into_any();
+            }
+            if x["locked"] == true {
+                return view! { <div class="card"><p>{s(&x["message"])}</p></div> }.into_any();
+            }
+            view! {
+                <div class="card">
+                    <h2>"1. Which company?"</h2>
+                    {items(&x["ranked"]).into_iter().map(|c| {
+                        let id = s(&c["company_id"]);
+                        let me = id.clone();
+                        view! {
+                            <div class="row">
+                                <button class="link" on:click=move |_| pick(id.clone())>
+                                    {move || if company.get() == me { "✓ " } else { "" }}
+                                    {s(&c["name"])}
+                                </button>
+                            </div>
+                        }
+                    }).collect_view()}
+                </div>
+                {move || (!facts.get().is_null()).then(|| view! {
+                    <div class="card">
+                        <h2>{format!("2. The one thing about {} you want to mention", s(&facts.get()["company"]))}</h2>
+                        <p class="meta">"The email may only say what this fact says. Each one shows its source."</p>
+                        {items(&facts.get()["facts"]).into_iter().map(|f| {
+                            let id = s(&f["id"]);
+                            let me = id.clone();
+                            view! {
+                                <div class="row">
+                                    <label>
+                                        <input type="radio" name="fact" prop:checked=move || fact.get() == me on:change=move |_| fact.set(id.clone())/>
+                                        {s(&f["text"])}
+                                    </label>
+                                    {source(&f["source_url"])}
+                                </div>
+                            }
+                        }).collect_view()}
+                        <h2>"3. Who are you writing to?"</h2>
+                        <p>"Their role (for example: Head of Care)"</p>
+                        <input prop:value=move || role.get() on:input=move |ev| role.set(event_target_value(&ev))/>
+                        <p>"Their name, if you know it"</p>
+                        <input prop:value=move || name.get() on:input=move |ev| name.set(event_target_value(&ev))/>
+                        <p>"When are you free for a call? (optional, for example: Tuesday morning)"</p>
+                        <input prop:value=move || times.get() on:input=move |ev| times.set(event_target_value(&ev))/>
+                        <p>
+                            <label>
+                                <input type="checkbox" prop:checked=move || dutch.get() on:change=move |_| dutch.update(|b| *b = !*b)/>
+                                "Write it in Dutch (otherwise English)"
+                            </label>
+                        </p>
+                        <p><button on:click=write>"Write three versions"</button></p>
+                    </div>
+                })}
+            }
+            .into_any()
+        }}
+        <Draft d=d note=note done=Callback::new(move |_| d.set(Value::Null))/>
+    }
+}
+
+const STAGE_KEYS: [&str; 10] = [
+    "interested",
+    "drafted",
+    "sent",
+    "replied",
+    "conversation_planned",
+    "conversation_held",
+    "follow_up",
+    "offer",
+    "closed",
+    "parked",
+];
+
+fn stage_name(st: &str) -> &'static str {
+    match st {
+        "interested" => "Interested",
+        "drafted" => "Email written",
+        "sent" => "Email sent",
+        "replied" => "They replied",
+        "conversation_planned" => "Conversation planned",
+        "conversation_held" => "Conversation held",
+        "follow_up" => "Follow-up sent",
+        "offer" => "Offer",
+        "closed" => "Closed",
+        "parked" => "Parked (no reply twice)",
+        _ => "Other",
+    }
+}
+
+/// Pipeline: every company she is in touch with, by stage, with the dated history; a follow-up
+/// when one is due; and after a conversation a spoken debrief whose suggestions she confirms.
+#[component]
+fn Pipeline(set_screen: WriteSignal<Screen>) -> impl IntoView {
+    let v = RwSignal::new(Value::Null);
+    let note = RwSignal::new(None::<String>);
+    let sel = RwSignal::new(String::new());
+    let (to, why, said) = (
+        RwSignal::new(String::new()),
+        RwSignal::new(String::new()),
+        RwSignal::new(String::new()),
+    );
+    let (rec, summary, site) = (
+        RwSignal::new(false),
+        RwSignal::new(String::new()),
+        RwSignal::new(String::new()),
+    );
+    let d = RwSignal::new(Value::Null);
+    let fail = move |e: String| match e.as_str() {
+        "unauthorized" => set_screen.set(Screen::Login),
+        "revoked" => set_screen.set(Screen::Unpaired(Some(nl(&e)))),
+        _ => note.set(Some(nl(&e))),
+    };
+    let load = move || {
+        spawn_local(async move {
+            match api("GET", "/pipeline", None).await {
+                Ok(x) => v.set(x),
+                Err(e) => fail(e),
+            }
+        })
+    };
+    load();
+    let post = move |path: String, body: Value, ok: &'static str| {
+        spawn_local(async move {
+            match api("POST", &path, Some(body)).await {
+                Ok(_) => {
+                    note.set(Some(ok.into()));
+                    load()
+                }
+                Err(e) => fail(e),
+            }
+        })
+    };
+    let follow_up = move |company: String| {
+        note.set(Some("Writing a polite follow-up...".into()));
+        spawn_local(async move {
+            match api(
+                "POST",
+                "/outreach/drafts",
+                Some(json!({"company_id": company, "follow_up": true})),
+            )
+            .await
+            {
+                Ok(x) => {
+                    note.set(None);
+                    d.set(x)
+                }
+                Err(e) => fail(e),
+            }
+        })
+    };
+    let mic = move |_| {
+        if !rec.get_untracked() {
+            spawn_local(async move {
+                match mic_start().await {
+                    Ok(_) => rec.set(true),
+                    Err(_) => note.set(Some(nl("no_mic"))),
+                }
+            });
+            return;
+        }
+        rec.set(false);
+        note.set(Some("Turning your words into text...".into()));
+        spawn_local(async move {
+            let t = match js_json(mic_stop().await) {
+                None => Err("bad_audio".to_string()),
+                Some(clip) => api("POST", "/intake/audio", Some(clip)).await.map(|v| s(&v["text"])),
+            };
+            match t {
+                Ok(t) => {
+                    note.set(None);
+                    said.update(|x| *x = format!("{x} {t}").trim().to_string())
+                }
+                Err(e) => fail(e),
+            }
+        })
+    };
+    let debrief = move |_| {
+        let (id, text) = (sel.get_untracked(), said.get_untracked());
+        spawn_local(async move {
+            match api("POST", &format!("/pipeline/{id}/debrief"), Some(json!({"text": text}))).await {
+                Ok(x) => {
+                    summary.set(format!("{} Next step: {}", s(&x["summary"]), s(&x["next_step"])));
+                    said.set(String::new());
+                    load()
+                }
+                Err(e) => fail(e),
+            }
+        })
+    };
+    view! {
+        <h1>"Pipeline"</h1>
+        {move || note.get().map(|n| view! { <p class="meta">{n}</p> })}
+        {move || {
+            let x = v.get();
+            if x.is_null() {
+                return view! { <p>"One moment..."</p> }.into_any();
+            }
+            if x["locked"] == true {
+                return view! { <div class="card"><p>{s(&x["message"])}</p></div> }.into_any();
+            }
+            let all = items(&x["items"]);
+            let sugg = items(&x["suggestions"]);
+            let empty = all.is_empty();
+            let groups = STAGE_KEYS.iter().filter_map(|&stg| {
+                let here: Vec<Value> = all.iter().filter(|i| i["stage"] == stg).cloned().collect();
+                (!here.is_empty()).then(|| view! {
+                    <div class="card">
+                        <h2>{stage_name(stg)}</h2>
+                        {here.into_iter().map(|it| {
+                            let id = s(&it["id"]);
+                            let (me, me2) = (id.clone(), id.clone());
+                            let company = s(&it["company_id"]);
+                            let history = items(&it["history"]);
+                            view! {
+                                <div class="fact">
+                                    <button class="link" on:click=move |_| { sel.set(id.clone()); summary.set(String::new()) }>{s(&it["company"])}</button>
+                                    {history.iter().map(|e| view! {
+                                        <p class="meta">{format!("{}: {}", s(&e["at"]).chars().take(10).collect::<String>(), s(&e["note"]))}</p>
+                                    }).collect_view()}
+                                    {(it["follow_up_due"] == true).then(|| view! {
+                                        <p>"No reply for 10 working days. A short, friendly reminder often helps. "
+                                            <button on:click=move |_| follow_up(company.clone())>"Write the follow-up"</button>
+                                        </p>
+                                    })}
+                                    {move || (sel.get() == me).then(|| {
+                                        let me2 = me2.clone();
+                                        view! {
+                                            <p>"Move to:"</p>
+                                            <select on:change=move |ev| to.set(event_target_value(&ev))>
+                                                <option value="">"choose a stage"</option>
+                                                {STAGE_KEYS.iter().map(|&t| view! { <option value=t>{stage_name(t)}</option> }).collect_view()}
+                                            </select>
+                                            <p>"A short note (what happened?)"</p>
+                                            <input prop:value=move || why.get() on:input=move |ev| why.set(event_target_value(&ev))/>
+                                            <button on:click=move |_| post(format!("/pipeline/{me2}/stage"),
+                                                json!({"stage": to.get_untracked(), "note": why.get_untracked()}), "Saved.")>"Save"</button>
+                                            <p>"After a conversation, tell me how it went. I'll suggest people or companies you mentioned; you decide what to add."</p>
+                                            <button on:click=mic>{move || if rec.get() { "Stop" } else { "Speak" }}</button>
+                                            <textarea rows="4" prop:value=move || said.get() on:input=move |ev| said.set(event_target_value(&ev))></textarea>
+                                            <button on:click=debrief>"Save how it went"</button>
+                                            <p>{move || summary.get()}</p>
+                                        }
+                                    })}
+                                </div>
+                            }
+                        }).collect_view()}
+                    </div>
+                })
+            }).collect_view();
+            view! {
+                {empty.then(|| view! {
+                    <div class="card"><p>"Nothing here yet. Write your first email in the Outreach studio."</p></div>
+                })}
+                {(!sugg.is_empty()).then(|| view! {
+                    <div class="card">
+                        <h2>"From your conversations: add these?"</h2>
+                        {sugg.into_iter().map(|g| {
+                            let id = s(&g["id"]);
+                            let id2 = id.clone();
+                            let company = g["kind"] == "company";
+                            let dd = &g["data"];
+                            let role = s(&dd["role"]);
+                            let at = s(&dd["company"]);
+                            let line = format!("{}{}{} · {}", s(&dd["name"]),
+                                if role.is_empty() { String::new() } else { format!(", {role}") },
+                                if at.is_empty() { String::new() } else { format!(" at {at}") },
+                                s(&dd["note"]));
+                            view! {
+                                <div class="row">
+                                    <p>{if company { format!("Company: {line}") } else { format!("Person: {line}") }}</p>
+                                    {company.then(|| view! {
+                                        <input placeholder="their website" prop:value=move || site.get() on:input=move |ev| site.set(event_target_value(&ev))/>
+                                    })}
+                                    <button on:click=move |_| post(format!("/suggestions/{id}"), json!({"add": true, "website": site.get_untracked()}), "Added.")>"Add"</button>
+                                    <button on:click=move |_| post(format!("/suggestions/{id2}"), json!({"add": false}), "Left out.")>"Not now"</button>
+                                </div>
+                            }
+                        }).collect_view()}
+                    </div>
+                })}
+                {groups}
+            }
+            .into_any()
+        }}
+        <Draft d=d note=note done=Callback::new(move |_| { d.set(Value::Null); load() })/>
+    }
 }

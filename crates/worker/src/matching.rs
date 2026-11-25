@@ -301,7 +301,8 @@ impl Worker {
     async fn build_digest(&self, user: Uuid) -> Result<(), sqlx::Error> {
         let rows = sqlx::query(
             "SELECT f.company_id, f.score, f.axes, c.name, c.subsector FROM fit_scores f JOIN companies c ON c.id = f.company_id \
-             WHERE f.user_id = $1",
+             WHERE f.user_id = $1 AND NOT EXISTS (SELECT 1 FROM pipeline_items p \
+             WHERE p.user_id = f.user_id AND p.company_id = f.company_id AND p.last_sent_at IS NOT NULL)",
         )
         .bind(user)
         .fetch_all(&self.pool)

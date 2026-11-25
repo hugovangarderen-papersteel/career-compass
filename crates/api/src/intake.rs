@@ -115,7 +115,12 @@ async fn ask(st: &AppState, user: &cc_db::User, req: &ToolRequest) -> ApiResult<
     ask_as(st, user, req, PURPOSE).await
 }
 
-async fn ask_as(st: &AppState, user: &cc_db::User, req: &ToolRequest, purpose: &'static str) -> ApiResult<Value> {
+pub(crate) async fn ask_as(
+    st: &AppState,
+    user: &cc_db::User,
+    req: &ToolRequest,
+    purpose: &'static str,
+) -> ApiResult<Value> {
     let llm = st.llm.as_ref().ok_or(ApiError::Unavailable("kompas_offline"))?;
     // Test track (or the canned test model): a real account gets no Kompas until Hugo's go.
     if st.test_only && !user.is_test {
@@ -919,6 +924,7 @@ mod tests {
         assert!(KOMPAS.len() > 4 * 512);
         assert!(EXTRACT.len() > 4 * 512);
         assert!(EXTRACT_DOC.len() > 4 * 512);
+        assert!(include_str!("prompts/outreach.md").len() > 4 * 512);
     }
 
     #[test]

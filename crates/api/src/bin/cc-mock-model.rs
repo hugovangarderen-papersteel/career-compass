@@ -24,7 +24,17 @@ static TURN: AtomicUsize = AtomicUsize::new(0);
 /// The answer the request's schema asks for (the same switch as the test mock).
 fn answer(b: &Value) -> Option<Value> {
     let props = &b["output_config"]["format"]["schema"]["properties"];
-    Some(if props.get("skills_reason").is_some() {
+    Some(if props.get("versions").is_some() {
+        json!({"versions": [{"tone": "warm", "subject": "Your recent news", "body": "Hello,
+
+To be upfront: I used an AI assistant to look for health tech companies whose goals match my experience, and yours came out near the top. I read your recent news with interest. In my last role I helped two teams through a merger and nobody left. If my background looks interesting, a short call is the best way to find out whether there is a fit. When would suit you?"}, {"tone": "direct", "subject": "A short call?", "body": "Hello,
+
+To be upfront: I used an AI assistant to look for health tech companies whose goals match my experience, and yours came out near the top. I read your recent news with interest. In my last role I helped two teams through a merger and nobody left. If my background looks interesting, a short call is the best way to find out whether there is a fit. When would suit you?"}, {"tone": "brief", "subject": "Your recent news", "body": "Hello,
+
+To be upfront: I used an AI assistant to look for health tech companies whose goals match my experience, and yours came out near the top. I read your recent news with interest. In my last role I helped two teams through a merger and nobody left. If my background looks interesting, a short call is the best way to find out whether there is a fit. When would suit you? We already work with 200 Hospitals."}], "linkedin": "Hello, an AI search pointed me to your company (test data). I would like to connect.", "phone": "Thank you for calling back (test data)."})
+    } else if props.get("next_step").is_some() {
+        json!({"summary": "It went well (test data).", "next_step": "Send my CV.", "suggestions": [{"kind": "contact", "name": "Test Person", "role": "Head of Care", "company": "Testco", "website": "", "note": "test data"}]})
+    } else if props.get("skills_reason").is_some() {
         json!({"skills": 0.7, "skills_reason": "Her strengths match what this company needs (test data).",
             "mission": 0.6, "mission_reason": "Its mission sits close to her themes (test data).",
             "anti_pref_hit": "", "working_language": "dutch"})
