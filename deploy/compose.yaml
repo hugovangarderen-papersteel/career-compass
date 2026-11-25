@@ -42,8 +42,11 @@ services:
       CC_MOCK_MODEL: ${CC_MOCK_MODEL:-0}
       # Test track: real accounts see Kompas offline until Hugo's go sets this to 0.
       CC_INTAKE_TEST_ONLY: ${CC_INTAKE_TEST_ONLY:-1}
+      # Push-to-talk: the stt service below. Empty turns the mic off (503 stt_offline).
+      CC_STT_URL: ${CC_STT_URL-http://stt:8000}
+      CC_STT_MODEL: ${CC_STT_MODEL:-Systran/faster-whisper-small}
     networks: [cc]
-    mem_limit: 256m
+    mem_limit: 512m # a 10 MB PDF is parsed in memory
 
   mock:
     profiles: [mock]
@@ -53,6 +56,17 @@ services:
     command: cc-mock-model
     networks: [cc]
     mem_limit: 64m
+
+  # Speech to text for push-to-talk (speaches, MIT; model faster-whisper-small, MIT). On the
+  # internal network only, no published port. Language is detected per clip. The model is
+  # downloaded once into the volume after the first start (see README, Deploy).
+  stt:
+    image: ghcr.io/speaches-ai/speaches:0.8.3-cpu@sha256:21e3df06d842fb7802ab470dd77c25f0e8c0d22950e8d8c6ae886e851af53ef8
+    restart: unless-stopped
+    volumes:
+      - hf-hub-cache:/home/ubuntu/.cache/huggingface/hub
+    networks: [cc]
+    mem_limit: 2g
 
   tunnel:
     image: cloudflare/cloudflared:latest
@@ -69,3 +83,4 @@ networks:
 
 volumes:
   db: {}
+  hf-hub-cache: {}

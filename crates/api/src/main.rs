@@ -49,6 +49,11 @@ async fn main() -> anyhow::Result<()> {
         tracing::warn!("Kompas answers test accounts only (CC_INTAKE_TEST_ONLY / CC_MOCK_MODEL)");
     }
     let web_dir = std::env::var("CC_WEB_DIR").ok().map(std::path::PathBuf::from);
+    let stt_url = std::env::var("CC_STT_URL")
+        .ok()
+        .map(|v| v.trim().trim_end_matches('/').to_string())
+        .filter(|v| !v.is_empty());
+    let stt_model = std::env::var("CC_STT_MODEL").unwrap_or_else(|_| "Systran/faster-whisper-small".into());
 
     let app = cc_api::app(cc_api::AppState {
         pool,
@@ -58,6 +63,8 @@ async fn main() -> anyhow::Result<()> {
         eur_per_usd,
         web_dir,
         test_only,
+        stt_url,
+        stt_model,
     });
     let listener = tokio::net::TcpListener::bind(&bind)
         .await

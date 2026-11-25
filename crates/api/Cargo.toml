@@ -36,6 +36,9 @@ clap.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 anyhow.workspace = true
+pdf-extract = "0.12.1"
+zip = { version = "9.8.2", default-features = false, features = ["deflate"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
 
 [dev-dependencies]
 tower.workspace = true

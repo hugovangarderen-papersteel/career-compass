@@ -453,28 +453,65 @@ pub struct Document {
     pub name: String,
     pub body: String,
     pub status: String,
+    /// Facts the model offered whose quote was not in the text (dropped by the snippet guard).
+    pub dropped: i32,
 }
 
-pub async fn add_document(pool: &PgPool, user: Uuid, name: &str, body: &str) -> Result<Uuid, Error> {
+/// One fact read from one of her documents; nothing reaches Kompas until she confirms it.
+pub struct Fact {
+    pub id: Uuid,
+    pub document_id: Uuid,
+    pub kind: String,
+    pub text: String,
+    pub snippet: String,
+    pub status: String,
+}
+
+/// Stores a document and the facts that passed the snippet guard, in one transaction.
+pub async fn add_document(
+    pool: &PgPool,
+    user: Uuid,
+    name: &str,
+    body: &str,
+    facts: &[cc_core::DocFact],
+    dropped: i32,
+) -> Result<Uuid, Error> {
     let id = Uuid::new_v4();
+    let mut tx = pool.begin().await?;
     sqlx::query(
-        "INSERT INTO documents (id, user_id, seq, name, body) \
-         SELECT $1, $2, COALESCE(MAX(seq), 0) + 1, $3, $4 FROM documents WHERE user_id = $2",
+        "INSERT INTO documents (id, user_id, seq, name, body, dropped)          SELECT $1, $2, COALESCE(MAX(seq), 0) + 1, $3, $4, $5 FROM documents WHERE user_id = $2",
     )
     .bind(id)
     .bind(user)
     .bind(name)
     .bind(body)
-    .execute(pool)
+    .bind(dropped)
+    .execute(&mut *tx)
     .await?;
+    for (i, f) in facts.iter().enumerate() {
+        sqlx::query(
+            "INSERT INTO document_facts (id, document_id, user_id, seq, kind, text, snippet)              VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(id)
+        .bind(user)
+        .bind(i as i32 + 1)
+        .bind(&f.kind)
+        .bind(&f.text)
+        .bind(&f.snippet)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
     Ok(id)
 }
 
 pub async fn documents(pool: &PgPool, user: Uuid) -> Result<Vec<Document>, Error> {
-    let rows = sqlx::query("SELECT id, seq, name, body, status FROM documents WHERE user_id = $1 ORDER BY seq")
-        .bind(user)
-        .fetch_all(pool)
-        .await?;
+    let rows =
+        sqlx::query("SELECT id, seq, name, body, status, dropped FROM documents WHERE user_id = $1 ORDER BY seq")
+            .bind(user)
+            .fetch_all(pool)
+            .await?;
     Ok(rows
         .into_iter()
         .map(|r| Document {
@@ -483,17 +520,40 @@ pub async fn documents(pool: &PgPool, user: Uuid) -> Result<Vec<Document>, Error
             name: r.get("name"),
             body: r.get("body"),
             status: r.get("status"),
+            dropped: r.get("dropped"),
         })
         .collect())
 }
 
-/// Confirms or rejects one of HER documents; false when it is not hers.
-pub async fn set_document_status(pool: &PgPool, user: Uuid, id: Uuid, status: &str) -> Result<bool, Error> {
-    let r = sqlx::query("UPDATE documents SET status = $3 WHERE id = $1 AND user_id = $2")
-        .bind(id)
-        .bind(user)
-        .bind(status)
-        .execute(pool)
-        .await?;
+pub async fn document_facts(pool: &PgPool, user: Uuid) -> Result<Vec<Fact>, Error> {
+    let rows = sqlx::query(
+        "SELECT id, document_id, kind, text, snippet, status FROM document_facts          WHERE user_id = $1 ORDER BY document_id, seq",
+    )
+    .bind(user)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|r| Fact {
+            id: r.get("id"),
+            document_id: r.get("document_id"),
+            kind: r.get("kind"),
+            text: r.get("text"),
+            snippet: r.get("snippet"),
+            status: r.get("status"),
+        })
+        .collect())
+}
+
+/// Confirms, corrects (new text, confirmed) or rejects one of HER facts; false when it is not hers.
+pub async fn set_fact(pool: &PgPool, user: Uuid, id: Uuid, status: &str, text: Option<&str>) -> Result<bool, Error> {
+    let r =
+        sqlx::query("UPDATE document_facts SET status = $3, text = COALESCE($4, text) WHERE id = $1 AND user_id = $2")
+            .bind(id)
+            .bind(user)
+            .bind(status)
+            .bind(text)
+            .execute(pool)
+            .await?;
     Ok(r.rows_affected() == 1)
 }

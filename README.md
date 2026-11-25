@@ -42,7 +42,8 @@ cd crates/web/src-tauri && cargo tauri dev
 ```
 
 Server environment: `DATABASE_URL`, `CC_JWT_SECRET` and `CC_ADMIN_TOKEN` (each at least 32 characters),
-optional `CC_BIND` (default `0.0.0.0:8080`). The desktop build reads `CC_API_URL` at compile time.
+optional `CC_BIND` (default `0.0.0.0:8080`), `CC_STT_URL` (the speech-to-text service; unset means
+speaking is off) and `CC_STT_MODEL` (default `Systran/faster-whisper-small`). The desktop build reads `CC_API_URL` at compile time.
 
 ## Releases
 
@@ -61,3 +62,8 @@ programs and are never linked into or copied into this code:
 | PostGIS | GPL-2.0-or-later | Postgres extension inside the database container | 2 |
 | Piper (piper1-gpl) | GPL-3.0 | Separate text-to-speech process on the server | 3 |
 | pgvector | PostgreSQL License | Postgres extension | 1 |
+| pdf-extract 0.12 (crate) | MIT | Reads the text of an uploaded PDF | 1b |
+| zip 9 (crate) | MIT | Opens an uploaded .docx to read its text | 1b |
+| reqwest 0.12 (crate) | MIT OR Apache-2.0 | Sends a voice clip to the speech-to-text service | 1b |
+| speaches 0.8.3 (container image, pinned by digest) | MIT | Separate speech-to-text service on the server | 1b |
+| faster-whisper-small (Systran, Whisper small weights) | MIT | The speech-to-text model speaches runs | 1b |

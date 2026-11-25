@@ -42,6 +42,9 @@ pub struct AppState {
     /// Kompas answers test accounts only: set while `llm` is the canned test model
     /// (`cc-mock-model`) and while a phase is on the test track before Hugo's go.
     pub test_only: bool,
+    /// The speech-to-text service (speaches, OpenAI-compatible); None answers 503 `stt_offline`.
+    pub stt_url: Option<String>,
+    pub stt_model: String,
 }
 
 mod intake;
@@ -360,6 +363,9 @@ async fn login(State(st): State<AppState>, h: HeaderMap, Json(c): Json<Credentia
     };
     match (ok, user) {
         (true, Some(u)) => Ok(Json(issue_jwt(&st, u.id, dev)?)),
+        // On an approved device only: her account exists but has no password yet, so the app
+        // can switch her to "Choose your password" instead of saying the password is wrong.
+        (_, Some(u)) if u.password_hash.is_none() => Err(ApiError::Conflict("no_password_yet")),
         _ => Err(ApiError::Unauthorized),
     }
 }
