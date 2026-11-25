@@ -102,7 +102,9 @@ impl Worker {
         // A panic on one odd page fails that job (and its company), not the whole worker task.
         let mut run = std::pin::pin!(self.handle(&job));
         let res = std::future::poll_fn(|cx| {
-            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run.as_mut().poll(cx))) {
+            match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                std::future::Future::poll(run.as_mut(), cx)
+            })) {
                 Ok(p) => p.map(Ok),
                 Err(p) => std::task::Poll::Ready(Err(p)),
             }
