@@ -183,6 +183,35 @@ async fn login(email: String, password: String, session: tauri::State<'_, Sessio
     start_session("/auth/login", email, password, &session).await
 }
 
+/// Does this account still need its first password? Asked on this approved device only, so
+/// the login screen can offer "Choose a password" before she types a wrong one.
+#[tauri::command]
+async fn account_check(email: String) -> Result<Value, String> {
+    let req = reqwest::Client::new()
+        .post(format!("{API}/auth/check"))
+        .header("x-device-token", device_token()?)
+        .json(&json!({ "email": email }));
+    let (code, body) = send(req).await?;
+    if code != 200 {
+        return Err(revoked_if_401(code, &body));
+    }
+    Ok(body)
+}
+
+/// A macOS notification that this week's companies are ready. The text is fixed here, so the
+/// window cannot put anything else in a notification.
+#[tauri::command]
+fn notify_digest(app: tauri::AppHandle) -> Result<Value, String> {
+    use tauri_plugin_notification::NotificationExt;
+    app.notification()
+        .builder()
+        .title("Your week is ready")
+        .body("New companies to look at are waiting in Career Compass.")
+        .show()
+        .map_err(|e| e.to_string())?;
+    Ok(json!({ "ok": true }))
+}
+
 #[tauri::command]
 async fn me(session: tauri::State<'_, Session>) -> Result<Value, String> {
     let jwt = session.0.lock().map_err(|_| "state")?.clone().ok_or("unauthorized")?;
@@ -199,10 +228,11 @@ async fn me(session: tauri::State<'_, Session>) -> Result<Value, String> {
 
 /// The only paths the window may reach through `api`: her intake, who she is, the
 /// companies, her matches, outreach and pipeline (the server keeps the admin views to
-/// the admin role).
+/// the admin role), and her display settings.
 fn allowed(method: &str, path: &str) -> bool {
-    const EXACT: [&str; 7] = [
+    const EXACT: [&str; 8] = [
         "/me",
+        "/settings",
         "/intake",
         "/companies",
         "/admin/companies",
@@ -210,13 +240,14 @@ fn allowed(method: &str, path: &str) -> bool {
         "/pipeline",
         "/contacts",
     ];
-    const PREFIX: [&str; 6] = [
+    const PREFIX: [&str; 7] = [
         "/intake/",
         "/admin/companies/",
         "/matching/",
         "/outreach/",
         "/pipeline/",
         "/suggestions/",
+        "/settings/",
     ];
     matches!(method, "GET" | "POST")
         && !path.contains("..")
@@ -268,6 +299,7 @@ async fn quiet_update(app: tauri::AppHandle) {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         .setup(|app| {
             tauri::async_runtime::spawn(quiet_update(app.handle().clone()));
             Ok(())
@@ -280,6 +312,8 @@ pub fn run() {
             set_password,
             login,
             me,
+            account_check,
+            notify_digest,
             api
         ])
         .run(tauri::generate_context!())
@@ -315,5 +349,13 @@ mod tests {
         assert!(!super::allowed("GET", "/pipeline/../stark/status"));
         assert!(!super::allowed("GET", "/matching?all=1"));
         assert!(!super::allowed("DELETE", "/outreach/drafts/abc"));
+        // Phase 5 screens.
+        assert!(super::allowed("POST", "/matching/grid"));
+        assert!(super::allowed("POST", "/matching/ranking"));
+        assert!(super::allowed("GET", "/matching/stories"));
+        assert!(super::allowed("GET", "/settings"));
+        assert!(super::allowed("POST", "/settings/digest-seen"));
+        assert!(!super::allowed("GET", "/settingsX"));
+        assert!(!super::allowed("POST", "/auth/check"));
     }
 }

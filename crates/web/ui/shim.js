@@ -76,9 +76,9 @@
   }
 
   // Same rule as `allowed` in src-tauri: her intake, who she is, the companies, her
-  // matches, outreach and pipeline.
-  const EXACT = ["/me", "/intake", "/companies", "/admin/companies", "/matching", "/pipeline", "/contacts"];
-  const PREFIX = ["/intake/", "/admin/companies/", "/matching/", "/outreach/", "/pipeline/", "/suggestions/"];
+  // matches, outreach and pipeline, and her display settings.
+  const EXACT = ["/me", "/settings", "/intake", "/companies", "/admin/companies", "/matching", "/pipeline", "/contacts"];
+  const PREFIX = ["/intake/", "/admin/companies/", "/matching/", "/outreach/", "/pipeline/", "/suggestions/", "/settings/"];
   const allowed = (m, p) =>
     (m === "GET" || m === "POST") && !p.includes("..") && !p.includes("?") &&
     (EXACT.includes(p) || PREFIX.some((x) => p.startsWith(x)));
@@ -118,6 +118,18 @@
     set_password: (a) => startSession("/auth/set-password", a),
     login: (a) => startSession("/auth/login", a),
     me: () => authed("GET", "/me"),
+    async account_check(a) {
+      const [code, body] = await send("POST", "/auth/check", { email: a.email }, { "x-device-token": deviceToken() });
+      if (code !== 200) throw revokedIf401(body);
+      return body;
+    },
+    // The phone has no Mac notification; a browser one only if she already allowed it.
+    async notify_digest() {
+      if (window.Notification && Notification.permission === "granted") {
+        new Notification("Your week is ready", { body: "New companies to look at are waiting in Career Compass." });
+      }
+      return { ok: true };
+    },
     async api(a) {
       if (!allowed(a.method, a.path)) throw "not_allowed";
       return authed(a.method, a.path, a.body === null ? undefined : a.body, 120000);

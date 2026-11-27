@@ -8,6 +8,8 @@ use serde::Serialize;
 use serde_json::{json, Value};
 use wasm_bindgen::prelude::*;
 
+mod explore;
+
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(catch, js_namespace = ["window", "__TAURI__", "core"])]
@@ -150,7 +152,7 @@ fn nl(e: &str) -> String {
         "empty" => "There's nothing in it yet.".into(),
         "no_password_yet" => "Welcome! Please choose your password first.".into(),
         "stt_offline" => "Speaking doesn't work right now. Please type your answer instead.".into(),
-        "no_mic" => "Career Compass may not use the microphone. You can allow it in System Settings, under Privacy & Security, Microphone.".into(),
+        "no_mic" => "Career Compass isn't allowed to use the microphone yet. You can allow it in System Settings, under Privacy & Security, Microphone.".into(),
         "bad_audio" => "That recording didn't come through. Please try again.".into(),
         "no_speech" => "I didn't hear any words. Please try again, a little closer to the microphone.".into(),
         "pick_a_fact" => "Please choose the one fact about the company that the email may use.".into(),
@@ -160,8 +162,8 @@ fn nl(e: &str) -> String {
         "nothing_sent_yet" => "There is no sent email to follow up on yet.".into(),
         "already_sent" => "You already marked this one as sent.".into(),
         "unsupported_file" => "I can read PDF, Word (.docx) and text files. Please choose one of those.".into(),
-        "unreadable_file" => "I couldn't open that file. Is it perhaps damaged or protected?".into(),
-        "no_text" => "I couldn't find any text in that file. Is it perhaps a scan? Then please paste the text instead.".into(),
+        "unreadable_file" => "I couldn't open that file. Could it be damaged or password-protected?".into(),
+        "no_text" => "I couldn't find any text in that file. Could it be a scan? If so, please paste the text instead.".into(),
         "bad_url" => "That doesn't look like a website address. Please paste the company's site, e.g. https://example.com.".into(),
         "forbidden" | "not_allowed" => "That isn't possible here.".into(),
         other => format!("Something went wrong ({other})."),
@@ -196,12 +198,12 @@ fn App() -> impl IntoView {
     });
 
     move || match screen.get() {
-        Screen::Loading => view! { <div class="center"><p>"One moment..."</p></div> }.into_any(),
+        Screen::Loading => view! { <div class="center"><p>"One moment…"</p></div> }.into_any(),
         Screen::Unpaired(err) => view! { <Pair err=err set_screen=set_screen/> }.into_any(),
         Screen::Waiting(code) => view! {
             <div class="center"><div class="card">
                 <h1>"Waiting for approval"</h1>
-                <p>"Hugo is getting a message now. Does he see this same code? Then all is well."</p>
+                <p>"Hugo is getting a message now. If he sees this same code, all is well."</p>
                 <div class="code">{code}</div>
                 <p>"This screen moves on by itself as soon as he says yes."</p>
             </div></div>
@@ -261,6 +263,24 @@ fn Login(set_screen: WriteSignal<Screen>) -> impl IntoView {
     let (error, set_error) = signal(None::<String>);
     let email = RwSignal::new(String::new());
     let password = RwSignal::new(String::new());
+    // An account that has no password yet is pointed to "Choose a password" straight away.
+    let check_account = move |e: String| {
+        #[derive(Serialize)]
+        struct Email {
+            email: String,
+        }
+        if !e.contains('@') {
+            return;
+        }
+        spawn_local(async move {
+            if let Ok(v) = call("account_check", &Email { email: e.trim().into() }).await {
+                if v["has_password"] == false {
+                    set_first.set(true);
+                    set_error.set(Some(nl("no_password_yet")));
+                }
+            }
+        });
+    };
     let submit = move |_| {
         let cmd = if first.get() { "set_password" } else { "login" };
         let args = Args {
@@ -283,7 +303,7 @@ fn Login(set_screen: WriteSignal<Screen>) -> impl IntoView {
         <div class="center"><div class="card">
             <h1>{move || if first.get() { "Choose your password" } else { "Log in" }}</h1>
             <label>"Email address"</label>
-            <input type="email" bind:value=email/>
+            <input type="email" bind:value=email on:blur=move |_| check_account(email.get())/>
             <label>{move || if first.get() { "New password (at least 8 characters)" } else { "Password" }}</label>
             <input type="password" bind:value=password/>
             <button on:click=submit>{move || if first.get() { "Save and continue" } else { "Log in" }}</button>
@@ -298,6 +318,34 @@ fn Login(set_screen: WriteSignal<Screen>) -> impl IntoView {
 #[component]
 fn Home(set_screen: WriteSignal<Screen>) -> impl IntoView {
     let (page, set_page) = signal(1usize);
+    // Her display settings, and a badge plus one Mac notification when a new digest is ready.
+    let unseen = RwSignal::new(false);
+    let check = move || {
+        spawn_local(async move {
+            match api("GET", "/settings", None).await {
+                Ok(v) => {
+                    explore::apply_display(&v);
+                    unseen.set(v["digest_unseen"] == true);
+                    explore::notify_once(&v);
+                }
+                Err(e) if e == "unauthorized" => set_screen.set(Screen::Login),
+                Err(_) => {}
+            }
+        })
+    };
+    check();
+    if let Ok(h) = set_interval_with_handle(check, std::time::Duration::from_secs(600)) {
+        on_cleanup(move || h.clear());
+    }
+    let go = move |i: usize| {
+        set_page.set(i);
+        if i == 0 && unseen.get() {
+            unseen.set(false);
+            spawn_local(async move {
+                let _ = api("POST", "/settings/digest-seen", None).await;
+            });
+        }
+    };
     view! {
         <div class="shell">
             <nav>
@@ -306,7 +354,10 @@ fn Home(set_screen: WriteSignal<Screen>) -> impl IntoView {
                     .iter()
                     .enumerate()
                     .map(|(i, name)| view! {
-                        <a class:active=move || page.get() == i on:click=move |_| set_page.set(i)>{*name}</a>
+                        <a class:active=move || page.get() == i on:click=move |_| go(i)>
+                            {*name}
+                            {move || (i == 0 && unseen.get()).then(|| view! { <span class="badge">"New"</span> })}
+                        </a>
                     })
                     .collect_view()}
             </nav>
@@ -317,16 +368,18 @@ fn Home(set_screen: WriteSignal<Screen>) -> impl IntoView {
                     view! { <Kompas set_screen=set_screen/> }.into_any()
                 } else if page.get() == 2 {
                     view! { <Companies set_screen=set_screen/> }.into_any()
+                } else if page.get() == 3 {
+                    view! { <explore::MapPage set_screen=set_screen/> }.into_any()
+                } else if page.get() == 4 {
+                    view! { <explore::Stories set_screen=set_screen/> }.into_any()
                 } else if page.get() == 5 {
                     view! { <Studio set_screen=set_screen/> }.into_any()
                 } else if page.get() == 6 {
                     view! { <Pipeline set_screen=set_screen/> }.into_any()
+                } else if page.get() == 7 {
+                    view! { <explore::Ranking set_screen=set_screen/> }.into_any()
                 } else {
-                    view! {
-                        <h1>{MENU[page.get()]}</h1>
-                        <p>"This part is coming in a later version. The app will update itself as soon as it's ready."</p>
-                    }
-                    .into_any()
+                    view! { <explore::Settings set_screen=set_screen/> }.into_any()
                 }}
             </main>
         </div>
@@ -419,7 +472,7 @@ fn Kompas(set_screen: WriteSignal<Screen>) -> impl IntoView {
     move || {
         let v = ctx.data.get();
         if v.is_null() {
-            return view! { <p>"One moment..."</p> }.into_any();
+            return view! { <p>"One moment…"</p> }.into_any();
         }
         let body = match v["status"].as_str().unwrap_or("none") {
             "none" => view! { <Intro ctx=ctx/> }.into_any(),
@@ -636,7 +689,7 @@ fn Companies(set_screen: WriteSignal<Screen>) -> impl IntoView {
                     url.set(String::new());
                     note.set(Some(if v["new"] == true {
                         format!(
-                            "Added {}. Its public pages are read in the background.",
+                            "Added {}. Its public pages are being read in the background.",
                             s(&v["website"])
                         )
                     } else {
@@ -670,13 +723,14 @@ fn Companies(set_screen: WriteSignal<Screen>) -> impl IntoView {
     view! {
         <h1>"Companies"</h1>
         <div class="card">
-            <p>"Know a company that could fit? Paste its website and it is looked up for you."</p>
+            <p>"Know a company that could fit? Paste its website and we'll look it up for you."</p>
             <div class="row">
                 <input type="url" placeholder="https://example.com" bind:value=url/>
                 <button on:click=add>"Add"</button>
             </div>
             {move || note.get().map(|n| view! { <p class="meta">{n}</p> })}
         </div>
+        <explore::CompanyGrid set_screen=set_screen/>
         {move || {
             let v = list.get();
             let cs = v["companies"].as_array()?.clone();
@@ -786,7 +840,7 @@ fn ThisWeek(set_screen: WriteSignal<Screen>) -> impl IntoView {
             let body = json!({"company_id": id, "up": up, "reason": r});
             match api("POST", "/matching/feedback", Some(body)).await {
                 Ok(_) => {
-                    note.set(Some("Thanks. The ranking is updated in the background.".into()));
+                    note.set(Some("Thanks. The ranking is being updated in the background.".into()));
                     open(id);
                 }
                 Err(e) => fail(e),
@@ -799,7 +853,7 @@ fn ThisWeek(set_screen: WriteSignal<Screen>) -> impl IntoView {
         {move || {
             let x = v.get();
             if x.is_null() {
-                return view! { <p>"One moment..."</p> }.into_any();
+                return view! { <p>"One moment…"</p> }.into_any();
             }
             if x["locked"] == true {
                 return view! { <div class="card"><p>{s(&x["message"])}</p></div> }.into_any();
@@ -890,7 +944,7 @@ fn ThisWeek(set_screen: WriteSignal<Screen>) -> impl IntoView {
                         <p class="meta">{thumbed}</p>
                         <div class="row">
                             <button on:click=move |_| thumb(up_id.clone(), true)>"Thumbs up"</button>
-                            <input type="text" placeholder="Not for me, because..." bind:value=reason/>
+                            <input type="text" placeholder="Not for me, because…" bind:value=reason/>
                             <button class="secondary" on:click=move |_| thumb(down_id.clone(), false)>"Thumbs down"</button>
                         </div>
                         <h3>"Facts"</h3>
@@ -963,7 +1017,12 @@ fn code_nl(c: &str) -> String {
         "care_tech" => "Care technology",
         "diagnostics" => "Diagnostics",
         "other" => "Other",
-        other => other,
+        // An unknown code still reads as words: "care_robotics" -> "Care robotics".
+        other => {
+            let t = other.replace('_', " ");
+            let mut c = t.chars();
+            return c.next().map_or(String::new(), |f| f.to_uppercase().chain(c).collect());
+        }
     }
     .to_string()
 }
@@ -1315,7 +1374,7 @@ fn Draft(d: RwSignal<Value>, note: RwSignal<Option<String>>, done: Callback<()>)
     let ask = RwSignal::new(String::new());
     let tweak = move |t: String| {
         let id = s(&d.get_untracked()["id"]);
-        note.set(Some("Rewriting all three versions...".into()));
+        note.set(Some("Rewriting all three versions…".into()));
         spawn_local(async move {
             match api("POST", &format!("/outreach/drafts/{id}/tweak"), Some(json!({"ask": t}))).await {
                 Ok(x) => {
@@ -1450,7 +1509,7 @@ fn Studio(set_screen: WriteSignal<Screen>) -> impl IntoView {
         let body = json!({"company_id": company.get_untracked(), "fact_id": fact.get_untracked(),
             "contact_role": role.get_untracked(), "contact_name": name.get_untracked(),
             "times": times.get_untracked(), "language": if dutch.get_untracked() { "nl" } else { "en" }});
-        note.set(Some("Writing three versions; this takes about half a minute...".into()));
+        note.set(Some("Writing three versions; this takes about half a minute…".into()));
         spawn_local(async move {
             match api("POST", "/outreach/drafts", Some(body)).await {
                 Ok(x) => {
@@ -1467,7 +1526,7 @@ fn Studio(set_screen: WriteSignal<Screen>) -> impl IntoView {
         {move || {
             let x = v.get();
             if x.is_null() {
-                return view! { <p>"One moment..."</p> }.into_any();
+                return view! { <p>"One moment…"</p> }.into_any();
             }
             if x["locked"] == true {
                 return view! { <div class="card"><p>{s(&x["message"])}</p></div> }.into_any();
@@ -1601,7 +1660,7 @@ fn Pipeline(set_screen: WriteSignal<Screen>) -> impl IntoView {
         })
     };
     let follow_up = move |company: String| {
-        note.set(Some("Writing a polite follow-up...".into()));
+        note.set(Some("Writing a polite follow-up…".into()));
         spawn_local(async move {
             match api(
                 "POST",
@@ -1629,7 +1688,7 @@ fn Pipeline(set_screen: WriteSignal<Screen>) -> impl IntoView {
             return;
         }
         rec.set(false);
-        note.set(Some("Turning your words into text...".into()));
+        note.set(Some("Turning your words into text…".into()));
         spawn_local(async move {
             let t = match js_json(mic_stop().await) {
                 None => Err("bad_audio".to_string()),
@@ -1663,7 +1722,7 @@ fn Pipeline(set_screen: WriteSignal<Screen>) -> impl IntoView {
         {move || {
             let x = v.get();
             if x.is_null() {
-                return view! { <p>"One moment..."</p> }.into_any();
+                return view! { <p>"One moment…"</p> }.into_any();
             }
             if x["locked"] == true {
                 return view! { <div class="card"><p>{s(&x["message"])}</p></div> }.into_any();

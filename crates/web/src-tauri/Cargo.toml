@@ -25,3 +25,5 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "nat
 # Device key and token live in the macOS Keychain (Credential Manager on a Windows dev box).
 keyring = { version = "3", features = ["apple-native", "windows-native", "linux-native"] }
 tauri-plugin-updater = "2"
+# The "your week is ready" notification (Apache-2.0 OR MIT).
+tauri-plugin-notification = "2"

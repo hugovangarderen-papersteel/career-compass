@@ -78,3 +78,39 @@ blockquote { margin: 0.6rem 0; padding: 0.6rem 0.9rem; background: var(--paper);
   main { padding: 1rem; }
   .bubble { max-width: 92%; }
 }
+
+/* Phase 5: her text size (three steps) and high contrast, set on <html> from her settings. */
+:root[data-size="1"] { font-size: 19px; }
+:root[data-size="2"] { font-size: 22px; }
+:root[data-contrast="high"] { --ink: #000; --paper: #fff; --accent: #0b4a66; --muted: #2b2b2b; --line: #4a4a4a; }
+:root[data-contrast="high"] .card, :root[data-contrast="high"] input, :root[data-contrast="high"] select { border: 2px solid var(--ink); }
+:root[data-contrast="high"] a, :root[data-contrast="high"] button.link { text-decoration: underline; }
+
+/* Grid, map, ranking. */
+.filters { display: flex; flex-wrap: wrap; gap: 0.8rem; margin-bottom: 0.8rem; }
+.filters label.filter { margin: 0; font-weight: 400; }
+.filters .meta { display: block; font-size: 0.85rem; }
+select { padding: 0.55rem; font-size: 1rem; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--ink); }
+.grid-wrap { overflow-x: auto; }
+table.grid { width: 100%; border-collapse: collapse; font-size: 0.95rem; }
+table.grid th { text-align: left; color: var(--muted); font-weight: 600; border-bottom: 2px solid var(--line); padding: 0.4rem; }
+table.grid td { border-bottom: 1px solid var(--line); padding: 0.45rem 0.4rem; vertical-align: top; }
+table.grid tr.ranked td:first-child { font-weight: 700; }
+button.small { margin-top: 0; padding: 0.35rem 0.7rem; font-size: 0.9rem; white-space: nowrap; }
+.map { height: 520px; border-radius: 8px; overflow: hidden; margin-top: 0.4rem; }
+.legend { display: flex; align-items: center; gap: 0.4rem 1.2rem; flex-wrap: wrap; }
+.legend .key { display: inline-flex; align-items: center; gap: 0.4rem; white-space: nowrap; }
+.legend .dot { display: inline-block; }
+.card.wide { max-width: 64rem; }
+.dot.inside { background: #2f6f8f; }
+.dot.outside { background: #c0663a; }
+.dot.unknown { background: #8a949b; }
+.row.rank { justify-content: flex-start; align-items: center; border-bottom: 1px solid var(--line); padding: 0.4rem 0; }
+.row.rank button { margin-top: 0; }
+.row.rank .pos { width: 1.8rem; font-weight: 700; color: var(--accent); }
+.row.rank .grow { flex: 1; }
+.badge { display: inline-block; margin-left: 0.4rem; padding: 0.05rem 0.45rem; border-radius: 999px; background: #c0663a; color: #fff; font-size: 0.75rem; font-weight: 700; }
+label.check { display: flex; gap: 0.5rem; align-items: center; font-weight: 400; }
+label.check input { width: auto; }
+.row.start { justify-content: flex-start; }
+button + button.link { margin-left: 1rem; }

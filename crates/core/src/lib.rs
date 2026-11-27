@@ -2,6 +2,7 @@
 //! Numbers here come from the build spec v2 (§2b pairing, §10b cost cap).
 
 pub mod company;
+pub mod grid;
 pub mod matching;
 pub mod outreach;
 pub mod profile;

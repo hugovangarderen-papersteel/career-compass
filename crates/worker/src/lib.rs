@@ -491,7 +491,8 @@ fn request(name: &str, website: &str, pages: &[(&str, Url, String)]) -> ToolRequ
             },
             "required": ["name", "facts", "events", "people"],
         }),
-        max_tokens: 4000,
+        // 4000 cut off the answer for companies with many pages; 8000 leaves room for them.
+        max_tokens: 8_000,
     }
 }
 

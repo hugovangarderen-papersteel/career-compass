@@ -1,10 +1,14 @@
 <!doctype html>
-<html lang="nl">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Career Compass</title>
     <link data-trunk rel="css" href="style.css" />
+    <!-- MapLibre GL JS 5.24.1, BSD-3-Clause (vendor/maplibre/LICENSE.txt), for the map screen. -->
+    <link data-trunk rel="css" href="vendor/maplibre/maplibre-gl.css" />
+    <link data-trunk rel="copy-dir" href="vendor/maplibre" />
+    <script defer src="maplibre/maplibre-gl.js"></script>
     <link data-trunk rel="rust" data-wasm-opt="z" data-wasm-opt-params="--enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext" />
   </head>
   <body></body>

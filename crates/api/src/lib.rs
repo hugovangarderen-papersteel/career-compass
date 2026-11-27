@@ -18,7 +18,7 @@ use base64::Engine;
 use cc_core::{DeviceStatus, StarkStatus};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use subtle::ConstantTimeEq;
@@ -48,6 +48,7 @@ pub struct AppState {
 }
 
 mod companies;
+mod explore;
 mod intake;
 mod matching;
 mod outreach;
@@ -59,6 +60,7 @@ pub fn app(state: AppState) -> Router {
         .route("/pair/{id}/claim", post(pair_claim))
         .route("/auth/set-password", post(set_password))
         .route("/auth/login", post(login))
+        .route("/auth/check", post(account_check))
         .route("/auth/refresh", post(refresh))
         .route("/me", get(me))
         .route("/stark/status", get(stark_status))
@@ -67,6 +69,7 @@ pub fn app(state: AppState) -> Router {
         .merge(intake::routes())
         .merge(companies::routes())
         .merge(matching::routes())
+        .merge(explore::routes())
         .merge(outreach::routes());
     if let Some(dir) = &state.web_dir {
         r = r
@@ -88,11 +91,13 @@ fn web_app(dir: &std::path::Path) -> Router {
     };
     Router::new()
         .fallback_service(files)
-        // trunk's loader is one inline module script; everything else must come from here.
+        // trunk's loader is one inline module script; everything else must come from here,
+        // except the map: OpenFreeMap tiles, glyphs and sprites, and MapLibre's blob worker.
         .layer(h(
             "content-security-policy",
             "default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval'; \
-             style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; \
+             style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://tiles.openfreemap.org; \
+             connect-src 'self' https://tiles.openfreemap.org; worker-src blob:; child-src blob:; \
              frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
         ))
         .layer(h("x-content-type-options", "nosniff"))
@@ -374,6 +379,21 @@ async fn login(State(st): State<AppState>, h: HeaderMap, Json(c): Json<Credentia
         (_, Some(u)) if u.password_hash.is_none() => Err(ApiError::Conflict("no_password_yet")),
         _ => Err(ApiError::Unauthorized),
     }
+}
+
+#[derive(Deserialize)]
+struct EmailIn {
+    email: String,
+}
+
+/// On an approved device only: does this account still need its first password? Lets the
+/// login screen offer "First time here? Choose a password" before she types a wrong one. An
+/// unknown address answers like an account with a password, so it reveals nothing new.
+async fn account_check(State(st): State<AppState>, h: HeaderMap, Json(b): Json<EmailIn>) -> ApiResult<Json<Value>> {
+    device_from_headers(&st, &h).await?;
+    let user = cc_db::user_by_email(&st.pool, b.email.trim()).await?;
+    let first = user.is_some_and(|u| u.password_hash.is_none());
+    Ok(Json(json!({ "has_password": !first })))
 }
 
 async fn refresh(State(st): State<AppState>, h: HeaderMap) -> ApiResult<Json<SessionOut>> {

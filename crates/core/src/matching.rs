@@ -202,19 +202,11 @@ pub fn role_score(prefs: &[(String, f64)], ops_strength: f64, careers: &str) -> 
         return (0.5, "You stated no role-type preference".into());
     }
     let page = careers.to_lowercase();
-    let words = |t: &str| -> &'static [&'static str] {
-        match t {
-            "interim" => &["interim", "freelance", "zzp"],
-            "part_time" => &["part-time", "part time", "parttime"],
-            "advisory" => &["advisor", "adviseur", "advisory board"],
-            _ => &[],
-        }
-    };
     let mut best = (0.0, "No sign they hire the way you want".to_string());
     for (t, w) in prefs {
         let hit = if t == "permanent" {
             (ops_strength / crate::company::weight("ops_roles")).min(1.0)
-        } else if words(t).iter().any(|k| page.contains(k)) {
+        } else if crate::grid::role_words(t).iter().any(|k| page.contains(k)) {
             1.0
         } else {
             0.0
