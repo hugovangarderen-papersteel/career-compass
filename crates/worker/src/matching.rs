@@ -282,7 +282,10 @@ impl Worker {
             .bind(version)
             .bind(score)
             .bind(&excluded)
-            .bind(json!({"axes": axes, "penalty": points, "penalty_reasons": hits, "travel": travel_note}))
+            .bind(
+                json!({"axes": axes, "penalty": points, "penalty_reasons": hits, "travel": travel_note,
+                "forms": cc_core::grid::role_forms(ops, &careers)}),
+            )
             .bind(minutes.map(|m| m as i32))
             .execute(&self.pool)
             .await?;

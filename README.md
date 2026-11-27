@@ -67,3 +67,6 @@ programs and are never linked into or copied into this code:
 | reqwest 0.12 (crate) | MIT OR Apache-2.0 | Sends a voice clip to the speech-to-text service | 1b |
 | speaches 0.8.3 (container image, pinned by digest) | MIT | Separate speech-to-text service on the server | 1b |
 | faster-whisper-small (Systran, Whisper small weights) | MIT | The speech-to-text model speaches runs | 1b |
+| MapLibre GL JS 5.24.1 (vendored in `crates/web/ui/vendor/maplibre`) | BSD-3-Clause | Draws the map screen | 5 |
+| OpenFreeMap tiles, OpenStreetMap data | ODbL 1.0 (data), attribution shown on the map | Map tiles and style | 5 |
+| tauri-plugin-notification 2 (crate) | Apache-2.0 OR MIT | The Mac notification when a digest is ready | 5 |

@@ -894,6 +894,127 @@ async fn matching_approve_rescore_digest(pool: PgPool) {
     let (_, d) = call(&app, "GET", &format!("/matching/companies/{top}"), &h, None).await;
     assert!(d["fit"]["excluded"].as_str().is_some(), "dismissed: {d}");
     assert_eq!(d["thumb"]["up"], false);
+
+    // Phase 5: the grid classifies the ring from the stored travel times, never shows the
+    // home coordinate, filters, and puts her own ranking first; it survives a fresh read.
+    // A company whose last reading refused some facts (`dropped`) still belongs in the grid.
+    sqlx::query("UPDATE companies SET dropped = 2 WHERE name = 'Testco A'")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (c, v) = call(&app, "POST", "/matching/grid", &h, Some(json!({"filter": {}}))).await;
+    assert_eq!(c, StatusCode::OK, "{v}");
+    assert_eq!(v["counts"]["total"], 7, "{v}");
+    assert_eq!(v["counts"]["inside"], 6, "{v}");
+    assert_eq!(v["counts"]["outside"], 1, "{v}");
+    assert!(!v.to_string().contains("\"lat\":50.0"), "no home coordinate: {v}");
+    let g_row = v["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["name"] == "Testco G")
+        .unwrap()
+        .clone();
+    assert_eq!(g_row["ring"], "outside");
+    assert_eq!(g_row["travel_min"], 300);
+    assert_eq!(v["rows"][0]["size"], "small", "seed headcount 40: {v}");
+    assert!(
+        v["rows"][0]["forms"].is_array(),
+        "role forms stored with the score: {v}"
+    );
+    let body = json!({"filter": {"ring": "inside", "sector": "medtech"}});
+    let (_, f) = call(&app, "POST", "/matching/grid", &h, Some(body)).await;
+    let names: Vec<&str> = f["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names.len(), 2, "{f}");
+    assert!(names.iter().all(|n| *n == "Testco D" || *n == "Testco E"), "{names:?}");
+    let e: String = sqlx::query_scalar("SELECT id::text FROM companies WHERE name = 'Testco E'")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let body = json!({"company_ids": [g, e, g, uuid::Uuid::new_v4()]});
+    let (c, r) = call(&app, "POST", "/matching/ranking", &h, Some(body)).await;
+    assert_eq!(c, StatusCode::OK, "{r}");
+    assert_eq!(
+        r["company_ids"].as_array().unwrap().len(),
+        2,
+        "deduplicated, unknown dropped: {r}"
+    );
+    let (_, r) = call(&app, "GET", "/matching/ranking", &h, None).await;
+    let mine: Vec<&str> = r["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(mine, ["Testco G", "Testco E"]);
+    let (_, v) = call(&app, "POST", "/matching/grid", &h, Some(json!({"filter": {}}))).await;
+    assert_eq!(v["rows"][0]["name"], "Testco G", "her ranking comes first");
+    assert_eq!(v["rows"][1]["name"], "Testco E");
+    let (c, st) = call(&app, "GET", "/matching/stories", &h, None).await;
+    assert_eq!(c, StatusCode::OK, "{st}");
+    assert!(st["items"].is_array());
+
+    // Settings: a digest is waiting until she has seen it; font and contrast persist.
+    let (_, s) = call(&app, "GET", "/settings", &h, None).await;
+    assert_eq!(s["digest_unseen"], true, "{s}");
+    assert_eq!(s["font_step"], 0);
+    let (c, s) = call(&app, "POST", "/settings", &h, Some(json!({"font_step": 3}))).await;
+    assert_eq!(c, StatusCode::BAD_REQUEST, "{s}");
+    call(&app, "POST", "/settings", &h, Some(json!({"font_step": 2}))).await;
+    call(&app, "POST", "/settings", &h, Some(json!({"high_contrast": true}))).await;
+    call(&app, "POST", "/settings/digest-seen", &h, None).await;
+    let (_, s) = call(&app, "GET", "/settings", &h, None).await;
+    assert_eq!(s["font_step"], 2, "{s}");
+    assert_eq!(s["high_contrast"], true, "{s}");
+    assert_eq!(s["digest_unseen"], false, "{s}");
+
+    // First login: the device can ask whether an account still needs its first password.
+    cc_db::create_user(&pool, "newcomer@example.org", cc_core::Role::Seeker)
+        .await
+        .unwrap();
+    let dt: Vec<(String, String)> = h.iter().filter(|(k, _)| k == "x-device-token").cloned().collect();
+    let (c, a) = call(
+        &app,
+        "POST",
+        "/auth/check",
+        &dt,
+        Some(json!({"email": "newcomer@example.org"})),
+    )
+    .await;
+    assert_eq!(c, StatusCode::OK, "{a}");
+    assert_eq!(a["has_password"], false);
+    let (_, a) = call(
+        &app,
+        "POST",
+        "/auth/check",
+        &dt,
+        Some(json!({"email": "seeker@example.org"})),
+    )
+    .await;
+    assert_eq!(a["has_password"], true);
+    let (_, a) = call(
+        &app,
+        "POST",
+        "/auth/check",
+        &dt,
+        Some(json!({"email": "nobody@example.org"})),
+    )
+    .await;
+    assert_eq!(a["has_password"], true, "an unknown address reveals nothing");
+    let (c, _) = call(
+        &app,
+        "POST",
+        "/auth/check",
+        &[],
+        Some(json!({"email": "newcomer@example.org"})),
+    )
+    .await;
+    assert_eq!(c, StatusCode::UNAUTHORIZED, "only on an approved device");
 }
 
 /// Phase 4 end to end, synthetic user and the mock model: locked before approval; three drafts
